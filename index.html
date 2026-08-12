@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Team Event Tracker</title>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <title>TOKEN2049 Team Event Tracker</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }
-    #status-msg { padding: 10px; border-radius: 6px; font-weight: bold; margin-bottom: 20px; display: none; }
+    #status-msg { padding: 12px; border-radius: 6px; font-weight: bold; margin-bottom: 20px; display: none; }
     .status-info { background: #e0f2fe; color: #0369a1; display: block !important; }
     .status-error { background: #fee2e2; color: #b91c1c; display: block !important; }
     .status-success { background: #dcfce7; color: #15803d; display: block !important; }
@@ -39,7 +38,7 @@
     <tbody id="new-table"></tbody>
   </table>
 
-  <h2>📋 Active Events</h2>
+  <h2>📋 Active Events (Master List)</h2>
   <table>
     <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
     <tbody id="active-table"></tbody>
@@ -52,9 +51,14 @@
   </table>
 
   <script>
-    const SUPABASE_URL = "https://vsvaqpsmrokvrbzwjfzv.supabase.co";
-    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdmFxcHNtcm9rdnJiendqZnp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDQ0MTMsImV4cCI6MjEwMDgyMDQxM30.BRlFMLivOdSgpxA_p6T85NnKZ7nFIqJgN9B06rbcEv0";
-    const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const API_URL = "https://vsvaqpsmrokvrbzwjfzv.supabase.co/rest/v1/events";
+    const API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdmFxcHNtcm9rdnJiendqZnp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDQ0MTMsImV4cCI6MjEwMDgyMDQxM30.BRlFMLivOdSgpxA_p6T85NnKZ7nFIqJgN9B06rbcEv0";
+
+    const headers = {
+      "apikey": API_KEY,
+      "Authorization": `Bearer ${API_KEY}`,
+      "Content-Type": "application/json"
+    };
 
     function showStatus(text, type = 'info') {
       const el = document.getElementById('status-msg');
@@ -64,13 +68,14 @@
 
     async function loadData() {
       try {
-        const { data: events, error } = await db.from('events').select('*').order('created_at', { ascending: false });
-        if (error) throw error;
+        const res = await fetch(`${API_URL}?select=*&order=created_at.desc`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to communicate with database.`);
 
+        const events = await res.json();
         const newBody = document.getElementById('new-table');
         const activeBody = document.getElementById('active-table');
         const processedBody = document.getElementById('processed-table');
-        
+
         newBody.innerHTML = '';
         activeBody.innerHTML = '';
         processedBody.innerHTML = '';
@@ -107,22 +112,30 @@
                 <td>${eventTime}</td>
                 <td>${e.name}</td>
                 <td><a href="${e.website || '#'}" target="_blank">Link ↗</a></td>
-                <td><span class="badge-status ${badgeClass}">${e.status.replace('_', ' ')}</span></td>
+                <td><span class="badge-status ${badgeClass}">${(e.status || '').replace('_', ' ')}</span></td>
               </tr>`;
           }
         });
 
         if (newBody.innerHTML === '') {
-          newBody.innerHTML = '<tr><td colspan="5" style="color: #64748b;">No new events added today. Check active list below.</td></tr>';
+          newBody.innerHTML = '<tr><td colspan="5" style="color: #64748b;">No new events added today. All items listed in Active Events below.</td></tr>';
         }
       } catch (err) {
-        showStatus("Database Error: " + err.message, "error");
+        showStatus("Database Error: " + err.message + " (If using Brave/uBlock, disable shield for this domain)", "error");
       }
     }
 
     async function setStatus(id, status) {
-      await db.from('events').update({ status }).eq('id', id);
-      await loadData();
+      try {
+        await fetch(`${API_URL}?id=eq.${id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ status })
+        });
+        await loadData();
+      } catch (err) {
+        showStatus("Error updating status: " + err.message, "error");
+      }
     }
 
     loadData();

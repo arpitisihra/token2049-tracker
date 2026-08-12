@@ -6,6 +6,10 @@
   <title>TOKEN2049 Team Event Tracker</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }
+    .header-bar { display: flex; justify-content: space-between; items-center; margin-bottom: 20px; }
+    .btn-update { padding: 12px 20px; background: #2563eb; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 700; font-size: 14px; box-shadow: 0 2px 4px rgba(37,99,235,0.2); }
+    .btn-update:hover { background: #1d4ed8; }
+    .btn-update:disabled { background: #94a3b8; cursor: not-allowed; }
     #status-msg { padding: 12px; border-radius: 6px; font-weight: bold; margin-bottom: 20px; display: none; }
     .status-info { background: #e0f2fe; color: #0369a1; display: block !important; }
     .status-error { background: #fee2e2; color: #b91c1c; display: block !important; }
@@ -29,10 +33,17 @@
 </head>
 <body>
 
-  <h1>TOKEN2049 Team Event Tracker</h1>
+  <div class="header-bar">
+    <div>
+      <h1 style="margin: 0;">TOKEN2049 Team Event Tracker</h1>
+      <p style="margin: 5px 0 0 0; color: #64748b; font-size: 14px;">Click the update button anytime to scan for new side events.</p>
+    </div>
+    <button id="updateBtn" class="btn-update" onclick="syncEvents()">🔄 Update / Fetch New Events</button>
+  </div>
+
   <div id="status-msg"></div>
 
-  <h2>🔥 Newly Discovered Events (Added Today)</h2>
+  <h2>🔥 Newly Added Events (Discovered Today)</h2>
   <table>
     <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
     <tbody id="new-table"></tbody>
@@ -53,6 +64,7 @@
   <script>
     const API_URL = "https://vsvaqpsmrokvrbzwjfzv.supabase.co/rest/v1/events";
     const API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdmFxcHNtcm9rdnJiendqZnp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDQ0MTMsImV4cCI6MjEwMDgyMDQxM30.BRlFMLivOdSgpxA_p6T85NnKZ7nFIqJgN9B06rbcEv0";
+    const TARGET_PAGE = "https://miragather.com/TOKEN2049SGSideEvents2026";
 
     const headers = {
       "apikey": API_KEY,
@@ -66,10 +78,111 @@
       el.innerText = text;
     }
 
+    function parseDateTime(e) {
+      if (!e || typeof e !== 'object') return { date: "TBD", time: "ALL DAY" };
+      const rawStart = e.start || e.startDate;
+      if (!rawStart) return { date: e.weekday || "TBD", time: "ALL DAY" };
+
+      try {
+        const d = new Date(rawStart);
+        const dateStr = d.toLocaleDateString("en-US", { weekday: 'short', day: 'numeric', month: 'short' });
+        const hours = d.getUTCHours();
+        const minutes = d.getUTCMinutes();
+        const timeStr = (!(hours === 0 && minutes === 0) && !e.allDay) 
+          ? d.toLocaleTimeString("en-US", { hour: '2-digit', minute: '2-digit' }) 
+          : "ALL DAY";
+        return { date: dateStr, time: timeStr };
+      } catch (err) {
+        return { date: e.weekday || "TBD", time: "ALL DAY" };
+      }
+    }
+
+    async function syncEvents() {
+      const btn = document.getElementById('updateBtn');
+      btn.disabled = true;
+      btn.innerText = "⏳ Fetching page data...";
+      showStatus("Connecting to MiraGather to scan for new events...", "info");
+
+      try {
+        // Fetch raw HTML through CORS proxy
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(TARGET_PAGE)}`;
+        const res = await fetch(proxyUrl);
+        if (!res.ok) throw new Error("Could not fetch target website.");
+
+        const html = await res.text();
+        const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s);
+        
+        if (!match) throw new Error("Could not extract data block from website.");
+
+        const jsonData = JSON.parse(match[1]);
+        const pageProps = jsonData.props?.pageProps || {};
+        const rawList = [
+          ...(pageProps.allFeaturedEvents || []),
+          ...(pageProps.sideEvents || []),
+          ...(pageProps.mainEvents || [])
+        ];
+
+        // Fetch existing events from Supabase to prevent duplicate additions
+        const existingRes = await fetch(`${API_URL}?select=id,status`, { headers });
+        const existingEvents = existingRes.ok ? await existingRes.json() : [];
+        const existingMap = new Map((existingEvents || []).map(x => [String(x.id), x.status]));
+
+        let newRecords = [];
+        let seenIds = new Set();
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        for (let item of rawList) {
+          if (!item || typeof item !== 'object') continue;
+          const e = (item.event && typeof item.event === 'object') ? item.event : item;
+          const eventId = String(e.id || item.id || "");
+
+          if (!eventId || seenIds.has(eventId)) continue;
+          seenIds.add(eventId);
+
+          // If event doesn't exist in database yet, stage it as a new event
+          if (!existingMap.has(eventId)) {
+            const dt = parseDateTime(e);
+            const name = e.name || e.event || "Untitled Event";
+            const website = e.website || (e.slug ? `https://miragather.com/event/${e.slug}` : "#");
+
+            newRecords.append({
+              id: eventId,
+              name: name,
+              start_date: dt.date,
+              location: dt.time,
+              website: website,
+              status: "active",
+              created_at: new Date().toISOString()
+            });
+          }
+        }
+
+        if (newRecords.length > 0) {
+          // Push newly discovered records to Supabase
+          await fetch(API_URL, {
+            method: 'POST',
+            headers: { ...headers, "Prefer": "resolution=merge-duplicates" },
+            body: JSON.stringify(newRecords)
+          });
+          showStatus(`🎉 Scan complete! Found and added ${newRecords.length} new events!`, "success");
+        } else {
+          showStatus("✅ Scan complete! No new events found. List is completely up to date.", "success");
+        }
+
+        await loadData();
+      } catch (err) {
+        showStatus("Fetch Warning: " + err.message + ". Showing existing database records.", "error");
+        await loadData();
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "🔄 Update / Fetch New Events";
+      }
+    }
+
     async function loadData() {
       try {
         const res = await fetch(`${API_URL}?select=*&order=created_at.desc`, { headers });
-        if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to communicate with database.`);
+        if (!res.ok) throw new Error("Could not load events from database.");
 
         const events = await res.json();
         const newBody = document.getElementById('new-table');
@@ -118,10 +231,10 @@
         });
 
         if (newBody.innerHTML === '') {
-          newBody.innerHTML = '<tr><td colspan="5" style="color: #64748b;">No new events added today. All items listed in Active Events below.</td></tr>';
+          newBody.innerHTML = '<tr><td colspan="5" style="color: #64748b;">No new events discovered today. Click the Update button above to scan.</td></tr>';
         }
       } catch (err) {
-        showStatus("Database Error: " + err.message + " (If using Brave/uBlock, disable shield for this domain)", "error");
+        showStatus("Database Error: " + err.message, "error");
       }
     }
 

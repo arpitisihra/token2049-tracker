@@ -33,31 +33,49 @@ def scrape():
         
         print(f"Opening {URL}...")
         page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(7000)
+        page.wait_for_timeout(8000)
 
-        rows = page.query_selector_all("table tr, div[class*='event']")
-        print(f"Found {len(rows)} potential event elements.")
+        # Select individual event containers/rows
+        cards = page.query_selector_all("tr, div[class*='event'], div[class*='row']")
+        print(f"Processing {len(cards)} elements...")
 
-        for row in rows:
+        for card in cards:
             try:
-                text = row.inner_text().strip()
+                text = card.inner_text().strip()
                 if not text:
                     continue
                 
                 lines = [line.strip() for line in text.split("\n") if line.strip()]
-                if len(lines) < 2:
+                
+                # Filter out system numbers, button text, or tiny lines
+                filtered_lines = [
+                    l for l in lines 
+                    if l not in ["Interested", "Going", "Add to calendar", "Link to website", "Open in a new tab"] 
+                    and not l.startswith("+") 
+                    and not l.isdigit()
+                ]
+
+                if len(filtered_lines) < 2:
                     continue
 
-                # Extract specific fields based on card/row layout
-                event_date = lines[0] if len(lines) > 0 else ""
-                event_time = lines[1] if len(lines) > 1 and ("AM" in lines[1] or "PM" in lines[1] or "DAY" in lines[1].upper()) else "ALL DAY"
+                # Parse layout fields
+                event_date = filtered_lines[0]
+                event_time = "ALL DAY"
                 
-                # Title and Host positioning
-                title_idx = 2 if len(lines) > 2 else 0
-                title = lines[title_idx]
-                host = lines[title_idx + 1] if len(lines) > (title_idx + 1) else ""
+                # Check if second line is a time indicator
+                start_idx = 1
+                if any(k in filtered_lines[1].upper() for k in ["AM", "PM", "ALL DAY"]):
+                    event_time = filtered_lines[1]
+                    start_idx = 2
 
-                link_elem = row.query_selector("a")
+                if len(filtered_lines) <= start_idx:
+                    continue
+
+                title = filtered_lines[start_idx]
+                host = filtered_lines[start_idx + 1] if len(filtered_lines) > (start_idx + 1) else ""
+
+                # Extract hyperlink
+                link_elem = card.query_selector("a[href*='http']")
                 link = link_elem.get_attribute("href") if link_elem else ""
 
                 event_id = generate_id(title, event_date)
@@ -75,7 +93,6 @@ def scrape():
                     existing_ids.add(event_id)
                     new_count += 1
             except Exception as e:
-                print(f"Skipping row due to error: {e}")
                 continue
 
         browser.close()

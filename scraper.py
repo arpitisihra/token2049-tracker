@@ -1,5 +1,6 @@
 import json
 import re
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime
@@ -10,6 +11,9 @@ SUPABASE_URL = "https://vsvaqpsmrokvrbzwjfzv.supabase.co/rest/v1/events"
 SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdmFxcHNtcm9rdnJiendqZnp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDQ0MTMsImV4cCI6MjEwMDgyMDQxM30.BRlFMLivOdSgpxA_p6T85NnKZ7nFIqJgN9B06rbcEv0"
 
 def parse_date_time(e):
+    if not isinstance(e, dict):
+        return "TBD", "ALL DAY"
+    
     raw_start = e.get("start") or e.get("startDate")
     if not raw_start:
         return e.get("weekday", "TBD"), "ALL DAY"
@@ -36,8 +40,6 @@ def scrape_and_sync():
 
         # Load DOM
         page.goto(URL, wait_until="domcontentloaded", timeout=30000)
-        
-        # Check for presence in DOM tree rather than visual visibility
         page.wait_for_selector("script#__NEXT_DATA__", state="attached", timeout=15000)
         
         html = page.content()
@@ -64,9 +66,9 @@ def scrape_and_sync():
             f"{SUPABASE_URL}?select=id",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
         )
-        with urllib.request.urlopen(req_get) as response:
+        with urllib.request.urlopen(req_get, timeout=10) as response:
             existing_data = json.loads(response.read().decode('utf-8'))
-            existing_ids = {str(item['id']) for item in existing_data}
+            existing_ids = {str(item['id']) for item in existing_data if isinstance(item, dict) and 'id' in item}
             print(f"Found {len(existing_ids)} existing events in Supabase.")
     except Exception as err:
         print(f"Notice: Supabase read warning: {err}")
@@ -76,7 +78,14 @@ def scrape_and_sync():
     seen = set()
 
     for item in raw_list:
-        e = item.get("event") or item
+        # Skip items that are not objects/dictionaries
+        if not isinstance(item, dict):
+            continue
+
+        e = item.get("event") if isinstance(item.get("event"), dict) else item
+        if not isinstance(e, dict):
+            continue
+
         event_id = str(e.get("id") or item.get("id") or "")
         
         if not event_id or event_id in seen:
@@ -104,7 +113,7 @@ def scrape_and_sync():
 
     print(f"Pushing {len(records)} new events to Supabase...")
 
-    # 3. Post new records to Supabase
+    # 3. Post new records to Supabase with retries
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -119,12 +128,17 @@ def scrape_and_sync():
         method='POST'
     )
     
-    try:
-        with urllib.request.urlopen(req_push) as response:
-            print(f"Success! Inserted {len(records)} events into Supabase (HTTP {response.status}).")
-    except urllib.error.HTTPError as err:
-        print(f"Error posting to Supabase: HTTP {err.code} - {err.read().decode('utf-8')}")
-        raise err
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req_push, timeout=15) as response:
+                print(f"Success! Inserted {len(records)} events into Supabase (HTTP {response.status}).")
+                break
+        except urllib.error.HTTPError as err:
+            print(f"Error posting to Supabase: HTTP {err.code} - {err.read().decode('utf-8')}")
+            raise err
+        except Exception as err:
+            print(f"Attempt {attempt + 1} failed ({err}). Retrying in 2 seconds...")
+            time.sleep(2)
 
 if __name__ == "__main__":
     scrape_and_sync()

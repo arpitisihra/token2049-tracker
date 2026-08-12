@@ -1,105 +1,108 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TOKEN2049 Side Events Tracker</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-    </style>
-</head>
-<body class="bg-[#F8FAFC] text-slate-800 min-h-screen p-4 md:p-8">
-    <div class="max-w-5xl mx-auto">
-        <header class="mb-6 border-b border-slate-200 pb-4">
-            <h1 class="text-2xl font-bold text-slate-900">TOKEN2049 Side Events Tracker</h1>
-            <p class="text-xs text-slate-500 mt-1">Automatically updated daily with newly added events on top.</p>
-        </header>
+import json
+import re
+import urllib.request
+from datetime import datetime
 
-        <div id="content" class="space-y-8">Loading events...</div>
-    </div>
+URL = "https://miragather.com/TOKEN2049SGSideEvents2026"
+SUPABASE_URL = "https://vsvaqpsmrokvrbzwjfzv.supabase.co/rest/v1/events"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdmFxcHNtcm9rdnJiendqZnp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDQ0MTMsImV4cCI6MjEwMDgyMDQxM30.BRlFMLivOdSgpxA_p6T85NnKZ7nFIqJgN9B06rbcEv0"
 
-    <script>
-        async function fetchEvents() {
-            try {
-                const res = await fetch('./events.json');
-                const events = await res.json();
-                
-                const grouped = {};
-                events.forEach(e => {
-                    const groupKey = e.added_date || "Initial Scrape";
-                    if (!grouped[groupKey]) grouped[groupKey] = [];
-                    grouped[groupKey].push(e);
-                });
+def parse_date_time(e):
+    raw_start = e.get("start") or e.get("startDate")
+    if not raw_start:
+        return e.get("weekday", "TBD"), "ALL DAY"
+    
+    try:
+        dt = datetime.fromisoformat(raw_start.replace('Z', '+00:00'))
+        date_str = dt.strftime("%a, %d %b")
+        time_str = "ALL DAY" if (dt.hour == 0 and dt.minute == 0) else dt.strftime("%I:%M %p")
+        return date_str, time_str
+    except Exception:
+        return e.get("weekday", "TBD"), "ALL DAY"
 
-                const contentDiv = document.getElementById('content');
-                contentDiv.innerHTML = '';
+def scrape_and_sync():
+    print(f"Fetching {URL}...")
+    req = urllib.request.Request(URL, headers={'User-Agent': 'Mozilla/5.0'})
+    html = urllib.request.urlopen(req).read().decode('utf-8')
 
-                const sortedDates = Object.keys(grouped).sort().reverse();
+    match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
+    if not match:
+        print("Error: Could not find __NEXT_DATA__ block.")
+        return
 
-                sortedDates.forEach(addedDate => {
-                    const section = document.createElement('div');
-                    section.className = 'mb-8';
-                    
-                    let html = `
-                        <div class="inline-block bg-slate-200 text-slate-700 font-semibold text-xs px-3 py-1 rounded-md mb-3">
-                            ADDED ON ${addedDate}
-                        </div>
-                        <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-                            <table class="w-full text-left border-collapse">
-                                <tbody>
-                    `;
+    data = json.loads(match.group(1))
+    page_props = data.get("props", {}).get("pageProps", {})
+    
+    raw_list = (
+        page_props.get("allFeaturedEvents", []) + 
+        page_props.get("sideEvents", []) + 
+        page_props.get("mainEvents", [])
+    )
 
-                    grouped[addedDate].forEach((ev, idx) => {
-                        const bgClass = idx % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]';
-                        const lines = ev.lines || [];
-                        
-                        const dateText = lines[0] || '';
-                        const timeText = lines[1] || 'ALL DAY';
-                        const titleText = lines[2] || lines[0] || 'Event';
-                        const hostText = lines[3] || '';
+    # Fetch existing IDs from Supabase to prevent overwriting 'applied' or 'not_relevant' statuses
+    existing_ids = set()
+    try:
+        req_get = urllib.request.Request(
+            f"{SUPABASE_URL}?select=id",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        )
+        with urllib.request.urlopen(req_get) as response:
+            existing_data = json.loads(response.read().decode('utf-8'))
+            existing_ids = {str(item['id']) for item in existing_data}
+    except Exception as err:
+        print(f"Notice: Could not fetch existing records ({err}). Proceeding with upsert.")
 
-                        html += `
-                            <tr class="${bgClass} border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                                <td class="py-3 px-4 text-xs font-semibold text-slate-700 w-28 align-top">
-                                    ${dateText}
-                                </td>
-                                <td class="py-3 px-4 text-xs text-slate-500 font-medium uppercase w-32 align-top">
-                                    ${timeText}
-                                </td>
-                                <td class="py-3 px-4 align-top">
-                                    <div class="text-sm font-bold text-slate-900">
-                                        ${titleText}
-                                    </div>
-                                    ${hostText ? `<div class="text-xs text-slate-500 mt-0.5">${hostText}</div>` : ''}
-                                </td>
-                                <td class="py-3 px-4 text-right align-top w-16">
-                                    ${ev.link ? `
-                                        <a href="${ev.link}" target="_blank" class="inline-flex items-center text-slate-400 hover:text-slate-700 transition-colors" title="Open Link">
-                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                                            </svg>
-                                        </a>
-                                    ` : ''}
-                                </td>
-                            </tr>
-                        `;
-                    });
+    records = []
+    seen = set()
 
-                    html += `
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
-                    section.innerHTML = html;
-                    contentDiv.appendChild(section);
-                });
-            } catch (err) {
-                document.getElementById('content').innerHTML = '<p class="text-slate-500">No events scraped yet.</p>';
-            }
-        }
-        fetchEvents();
-    </script>
-</body>
-</html>
+    for item in raw_list:
+        e = item.get("event") or item
+        event_id = str(e.get("id") or item.get("id") or "")
+        
+        if not event_id or event_id in seen:
+            continue
+        seen.add(event_id)
+
+        # Only insert new events as 'active'; preserve existing records
+        if event_id not in existing_ids:
+            date_str, time_str = parse_date_time(e)
+            name = e.get("name") or e.get("event") or "Untitled Event"
+            slug = e.get("slug")
+            website = e.get("website") or (f"https://miragather.com/event/{slug}" if slug else "#")
+
+            records.append({
+                "id": event_id,
+                "name": name,
+                "start_date": date_str,
+                "location": time_str,
+                "website": website,
+                "status": "active"
+            })
+
+    if not records:
+        print("No new events found today.")
+        return
+
+    # Push new records to Supabase
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates"
+    }
+
+    req_push = urllib.request.Request(
+        SUPABASE_URL, 
+        data=json.dumps(records).encode('utf-8'), 
+        headers=headers, 
+        method='POST'
+    )
+    
+    try:
+        with urllib.request.urlopen(req_push) as response:
+            print(f"Successfully added {len(records)} new events to Supabase!")
+    except Exception as err:
+        print(f"Failed to update Supabase: {err}")
+
+if __name__ == "__main__":
+    scrape_and_sync()

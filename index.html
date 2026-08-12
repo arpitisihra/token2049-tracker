@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TOKEN2049 Side Events</title>
+    <title>TOKEN2049 Side Events Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -12,11 +12,9 @@
 </head>
 <body class="bg-[#F8FAFC] text-slate-800 min-h-screen p-4 md:p-8">
     <div class="max-w-5xl mx-auto">
-        <header class="mb-6 flex justify-between items-center border-b border-slate-200 pb-4">
-            <div>
-                <h1 class="text-2xl font-bold text-slate-900">TOKEN2049 Side Events Tracker</h1>
-                <p class="text-xs text-slate-500 mt-1">Automatically updated daily with newly added events on top.</p>
-            </div>
+        <header class="mb-6 border-b border-slate-200 pb-4">
+            <h1 class="text-2xl font-bold text-slate-900">TOKEN2049 Side Events Tracker</h1>
+            <p class="text-xs text-slate-500 mt-1">Automatically updated daily with newly added events on top.</p>
         </header>
 
         <div id="content" class="space-y-6">Loading events...</div>
@@ -38,16 +36,15 @@
                 const contentDiv = document.getElementById('content');
                 contentDiv.innerHTML = '';
 
-                // Show latest added dates at the top
                 const sortedDates = Object.keys(grouped).sort().reverse();
 
                 sortedDates.forEach(addedDate => {
                     const section = document.createElement('div');
-                    section.className = 'mb-6';
+                    section.className = 'mb-8';
                     
                     let html = `
                         <div class="inline-block bg-slate-200 text-slate-700 font-semibold text-xs px-3 py-1 rounded-md mb-3">
-                            ADDED ON ${addedDate} (${grouped[addedDate].length} events)
+                            ADDED ON ${addedDate}
                         </div>
                         <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
                             <table class="w-full text-left border-collapse">
@@ -57,22 +54,22 @@
                     grouped[addedDate].forEach((ev, idx) => {
                         const bgClass = idx % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]';
                         html += `
-                            <tr class="${bgClass} border-b border-slate-100 hover:bg-purple-50/50 transition-colors">
-                                <td class="py-3 px-4 text-xs font-semibold text-slate-600 w-24 align-top">
-                                    ${ev.event_date || 'Date TBD'}
+                            <tr class="${bgClass} border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                                <td class="py-3 px-4 text-xs font-semibold text-slate-700 w-28 align-top">
+                                    ${ev.event_date}
                                 </td>
-                                <td class="py-3 px-4 text-xs text-slate-500 uppercase tracking-wider w-32 align-top">
-                                    ${ev.event_time || 'ALL DAY'}
+                                <td class="py-3 px-4 text-xs text-slate-500 font-medium uppercase w-32 align-top">
+                                    ${ev.event_time}
                                 </td>
                                 <td class="py-3 px-4 align-top">
-                                    <div class="text-sm font-bold text-slate-900 hover:text-purple-700 transition-colors">
+                                    <div class="text-sm font-bold text-slate-900">
                                         ${ev.title}
                                     </div>
-                                    ${ev.host ? `<div class="text-xs text-slate-400 mt-0.5">${ev.host}</div>` : ''}
+                                    ${ev.host ? `<div class="text-xs text-slate-500 mt-0.5">${ev.host}</div>` : ''}
                                 </td>
-                                <td class="py-3 px-4 text-right align-top w-20">
+                                <td class="py-3 px-4 text-right align-top w-16">
                                     ${ev.link ? `
-                                        <a href="${ev.link}" target="_blank" class="inline-flex items-center text-slate-400 hover:text-purple-600 transition-colors p-1" title="Open Link">
+                                        <a href="${ev.link}" target="_blank" class="inline-flex items-center text-slate-400 hover:text-slate-700 transition-colors" title="Open Link">
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
                                             </svg>
@@ -92,7 +89,7 @@
                     contentDiv.appendChild(section);
                 });
             } catch (err) {
-                document.getElementById('content').innerHTML = '<p class="text-slate-500">No events scraped yet. Trigger a manual run in GitHub Actions!</p>';
+                document.getElementById('content').innerHTML = '<p class="text-slate-500">No events scraped yet.</p>';
             }
         }
         fetchEvents();

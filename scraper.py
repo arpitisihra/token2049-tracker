@@ -1,6 +1,7 @@
 import json
 import re
 import urllib.request
+import urllib.error
 from datetime import datetime
 
 URL = "https://miragather.com/TOKEN2049SGSideEvents2026"
@@ -21,13 +22,18 @@ def parse_date_time(e):
         return e.get("weekday", "TBD"), "ALL DAY"
 
 def scrape_and_sync():
-    print(f"Fetching {URL}...")
+    print(f"Fetching source page from {URL}...")
     req = urllib.request.Request(URL, headers={'User-Agent': 'Mozilla/5.0'})
-    html = urllib.request.urlopen(req).read().decode('utf-8')
+    
+    try:
+        html = urllib.request.urlopen(req).read().decode('utf-8')
+    except Exception as err:
+        print(f"Failed to load URL: {err}")
+        return
 
     match = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html, re.DOTALL)
     if not match:
-        print("Error: Could not find __NEXT_DATA__ block.")
+        print("Error: Could not find __NEXT_DATA__ block in source HTML.")
         return
 
     data = json.loads(match.group(1))
@@ -39,19 +45,26 @@ def scrape_and_sync():
         page_props.get("mainEvents", [])
     )
 
-    # Fetch existing IDs from Supabase to prevent overwriting 'applied' or 'not_relevant' statuses
+    # 1. Fetch existing IDs from Supabase to avoid overwriting applied/not_relevant statuses
     existing_ids = set()
     try:
         req_get = urllib.request.Request(
             f"{SUPABASE_URL}?select=id",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            headers={
+                "apikey": SUPABASE_KEY, 
+                "Authorization": f"Bearer {SUPABASE_KEY}"
+            }
         )
         with urllib.request.urlopen(req_get) as response:
             existing_data = json.loads(response.read().decode('utf-8'))
             existing_ids = {str(item['id']) for item in existing_data}
+            print(f"Found {len(existing_ids)} existing events in Supabase.")
+    except urllib.error.HTTPError as err:
+        print(f"Notice: Could not read Supabase table (HTTP {err.code}). Make sure SQL table 'events' is created.")
     except Exception as err:
-        print(f"Notice: Could not fetch existing records ({err}). Proceeding with upsert.")
+        print(f"Notice: Supabase read warning: {err}")
 
+    # 2. Extract new records
     records = []
     seen = set()
 
@@ -63,7 +76,6 @@ def scrape_and_sync():
             continue
         seen.add(event_id)
 
-        # Only insert new events as 'active'; preserve existing records
         if event_id not in existing_ids:
             date_str, time_str = parse_date_time(e)
             name = e.get("name") or e.get("event") or "Untitled Event"
@@ -80,10 +92,12 @@ def scrape_and_sync():
             })
 
     if not records:
-        print("No new events found today.")
+        print("No new events found today. Supabase is up to date!")
         return
 
-    # Push new records to Supabase
+    print(f"Pushing {len(records)} new events to Supabase...")
+
+    # 3. Post new records to Supabase
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -100,9 +114,13 @@ def scrape_and_sync():
     
     try:
         with urllib.request.urlopen(req_push) as response:
-            print(f"Successfully added {len(records)} new events to Supabase!")
+            print(f"Success! Inserted {len(records)} events into Supabase (HTTP {response.status}).")
+    except urllib.error.HTTPError as err:
+        print(f"Error posting to Supabase: HTTP {err.code} - {err.read().decode('utf-8')}")
+        raise err
     except Exception as err:
         print(f"Failed to update Supabase: {err}")
+        raise err
 
 if __name__ == "__main__":
     scrape_and_sync()

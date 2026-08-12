@@ -23,14 +23,20 @@ def parse_date_time(e):
         return e.get("weekday", "TBD"), "ALL DAY"
 
 def scrape_and_sync():
-    print(f"Opening headless browser to bypass security for {URL}...")
+    print(f"Opening browser for {URL}...")
     
     html = ""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(URL, wait_until="networkidle", timeout=60000)
-        page.wait_for_timeout(5000)
+        context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        page = context.new_page()
+
+        # Block media and stylesheets to speed up load time
+        page.route("**/*.{png,jpg,jpeg,svg,css,woff,woff2}", lambda route: route.abort())
+
+        # Load DOM only and wait specifically for the data tag
+        page.goto(URL, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_selector("script#__NEXT_DATA__", timeout=15000)
         html = page.content()
         browser.close()
 
@@ -60,7 +66,7 @@ def scrape_and_sync():
             existing_ids = {str(item['id']) for item in existing_data}
             print(f"Found {len(existing_ids)} existing events in Supabase.")
     except Exception as err:
-        print(f"Notice: Supabase read warning (is table created?): {err}")
+        print(f"Notice: Supabase read warning: {err}")
 
     # 2. Extract new records
     records = []

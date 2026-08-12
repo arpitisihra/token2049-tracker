@@ -31,12 +31,15 @@ def scrape_and_sync():
         context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         page = context.new_page()
 
-        # Block media and stylesheets to speed up load time
-        page.route("**/*.{png,jpg,jpeg,svg,css,woff,woff2}", lambda route: route.abort())
+        # Abort images and fonts to load the page faster
+        page.route("**/*.{png,jpg,jpeg,svg,woff,woff2}", lambda route: route.abort())
 
-        # Load DOM only and wait specifically for the data tag
+        # Load DOM
         page.goto(URL, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_selector("script#__NEXT_DATA__", timeout=15000)
+        
+        # Check for presence in DOM tree rather than visual visibility
+        page.wait_for_selector("script#__NEXT_DATA__", state="attached", timeout=15000)
+        
         html = page.content()
         browser.close()
 

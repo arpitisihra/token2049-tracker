@@ -47,10 +47,16 @@ def scrape():
                 lines = [line.strip() for line in text.split("\n") if line.strip()]
                 if len(lines) < 2:
                     continue
+
+                # Extract specific fields based on card/row layout
+                event_date = lines[0] if len(lines) > 0 else ""
+                event_time = lines[1] if len(lines) > 1 and ("AM" in lines[1] or "PM" in lines[1] or "DAY" in lines[1].upper()) else "ALL DAY"
                 
-                title = lines[2] if len(lines) > 2 else lines[0]
-                event_date = lines[0]
-                
+                # Title and Host positioning
+                title_idx = 2 if len(lines) > 2 else 0
+                title = lines[title_idx]
+                host = lines[title_idx + 1] if len(lines) > (title_idx + 1) else ""
+
                 link_elem = row.query_selector("a")
                 link = link_elem.get_attribute("href") if link_elem else ""
 
@@ -59,9 +65,10 @@ def scrape():
                 if event_id not in existing_ids:
                     existing_events.append({
                         "id": event_id,
+                        "event_date": event_date,
+                        "event_time": event_time,
                         "title": title,
-                        "date": event_date,
-                        "raw_text": text,
+                        "host": host,
                         "link": link,
                         "added_date": today_str
                     })

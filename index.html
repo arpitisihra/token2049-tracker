@@ -1,98 +1,131 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TOKEN2049 Side Events Tracker</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        body { font-family: 'Inter', sans-serif; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Team Event Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }
+    #status-msg { padding: 10px; border-radius: 6px; font-weight: bold; margin-bottom: 20px; display: none; }
+    .status-info { background: #e0f2fe; color: #0369a1; display: block !important; }
+    .status-error { background: #fee2e2; color: #b91c1c; display: block !important; }
+    .status-success { background: #dcfce7; color: #15803d; display: block !important; }
+    h2 { margin-top: 30px; font-size: 18px; color: #1e293b; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+    th { background: #f1f5f9; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
+    .btn-action { padding: 6px 12px; font-size: 12px; margin-right: 5px; border-radius: 4px; border: none; cursor: pointer; color: white; font-weight: 600; }
+    .btn-applied { background: #16a34a; }
+    .btn-applied:hover { background: #15803d; }
+    .btn-irrelevant { background: #dc2626; }
+    .btn-irrelevant:hover { background: #b91c1c; }
+    .badge-status { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
+    .badge-applied { background: #dcfce7; color: #15803d; }
+    .badge-not_relevant { background: #fee2e2; color: #b91c1c; }
+    .badge-new { background: #f59e0b; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+    a { color: #2563eb; text-decoration: none; font-weight: 500; }
+    a:hover { text-decoration: underline; }
+  </style>
 </head>
-<body class="bg-[#F8FAFC] text-slate-800 min-h-screen p-4 md:p-8">
-    <div class="max-w-5xl mx-auto">
-        <header class="mb-6 border-b border-slate-200 pb-4">
-            <h1 class="text-2xl font-bold text-slate-900">TOKEN2049 Side Events Tracker</h1>
-            <p class="text-xs text-slate-500 mt-1">Automatically updated daily with newly added events on top.</p>
-        </header>
+<body>
 
-        <div id="content" class="space-y-6">Loading events...</div>
-    </div>
+  <h1>TOKEN2049 Team Event Tracker</h1>
+  <div id="status-msg"></div>
 
-    <script>
-        async function fetchEvents() {
-            try {
-                const res = await fetch('./events.json');
-                const events = await res.json();
-                
-                const grouped = {};
-                events.forEach(e => {
-                    const groupKey = e.added_date || "Initial Scrape";
-                    if (!grouped[groupKey]) grouped[groupKey] = [];
-                    grouped[groupKey].push(e);
-                });
+  <h2>🔥 Newly Discovered Events (Added Today)</h2>
+  <table>
+    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
+    <tbody id="new-table"></tbody>
+  </table>
 
-                const contentDiv = document.getElementById('content');
-                contentDiv.innerHTML = '';
+  <h2>📋 Active Events</h2>
+  <table>
+    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
+    <tbody id="active-table"></tbody>
+  </table>
 
-                const sortedDates = Object.keys(grouped).sort().reverse();
+  <h2>📂 Processed Events (Applied / Not Relevant)</h2>
+  <table>
+    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Status</th></tr></thead>
+    <tbody id="processed-table"></tbody>
+  </table>
 
-                sortedDates.forEach(addedDate => {
-                    const section = document.createElement('div');
-                    section.className = 'mb-8';
-                    
-                    let html = `
-                        <div class="inline-block bg-slate-200 text-slate-700 font-semibold text-xs px-3 py-1 rounded-md mb-3">
-                            ADDED ON ${addedDate}
-                        </div>
-                        <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-                            <table class="w-full text-left border-collapse">
-                                <tbody>
-                    `;
+  <script>
+    const SUPABASE_URL = "https://vsvaqpsmrokvrbzwjfzv.supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdmFxcHNtcm9rdnJiendqZnp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDQ0MTMsImV4cCI6MjEwMDgyMDQxM30.BRlFMLivOdSgpxA_p6T85NnKZ7nFIqJgN9B06rbcEv0";
+    const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-                    grouped[addedDate].forEach((ev, idx) => {
-                        const bgClass = idx % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]';
-                        html += `
-                            <tr class="${bgClass} border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                                <td class="py-3 px-4 text-xs font-semibold text-slate-700 w-28 align-top">
-                                    ${ev.event_date}
-                                </td>
-                                <td class="py-3 px-4 text-xs text-slate-500 font-medium uppercase w-32 align-top">
-                                    ${ev.event_time}
-                                </td>
-                                <td class="py-3 px-4 align-top">
-                                    <div class="text-sm font-bold text-slate-900">
-                                        ${ev.title}
-                                    </div>
-                                    ${ev.host ? `<div class="text-xs text-slate-500 mt-0.5">${ev.host}</div>` : ''}
-                                </td>
-                                <td class="py-3 px-4 text-right align-top w-16">
-                                    ${ev.link ? `
-                                        <a href="${ev.link}" target="_blank" class="inline-flex items-center text-slate-400 hover:text-slate-700 transition-colors" title="Open Link">
-                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
-                                            </svg>
-                                        </a>
-                                    ` : ''}
-                                </td>
-                            </tr>
-                        `;
-                    });
+    function showStatus(text, type = 'info') {
+      const el = document.getElementById('status-msg');
+      el.className = `status-${type}`;
+      el.innerText = text;
+    }
 
-                    html += `
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
-                    section.innerHTML = html;
-                    contentDiv.appendChild(section);
-                });
-            } catch (err) {
-                document.getElementById('content').innerHTML = '<p class="text-slate-500">No events scraped yet.</p>';
+    async function loadData() {
+      try {
+        const { data: events, error } = await db.from('events').select('*').order('created_at', { ascending: false });
+        if (error) throw error;
+
+        const newBody = document.getElementById('new-table');
+        const activeBody = document.getElementById('active-table');
+        const processedBody = document.getElementById('processed-table');
+        
+        newBody.innerHTML = '';
+        activeBody.innerHTML = '';
+        processedBody.innerHTML = '';
+
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        (events || []).forEach(e => {
+          const eventTime = e.location || 'ALL DAY';
+          const isAddedToday = e.created_at && e.created_at.startsWith(todayStr);
+
+          if (e.status === 'active') {
+            const rowHtml = `
+              <tr>
+                <td>${e.start_date || 'TBD'}</td>
+                <td><strong>${eventTime}</strong></td>
+                <td>${isAddedToday ? '<span class="badge-new">NEW</span> ' : ''}<strong>${e.name}</strong></td>
+                <td><a href="${e.website || '#'}" target="_blank">Link ↗</a></td>
+                <td>
+                  <button class="btn-action btn-applied" onclick="setStatus('${e.id}', 'applied')">Applied</button>
+                  <button class="btn-action btn-irrelevant" onclick="setStatus('${e.id}', 'not_relevant')">Not Relevant</button>
+                </td>
+              </tr>`;
+
+            if (isAddedToday) {
+              newBody.innerHTML += rowHtml;
+            } else {
+              activeBody.innerHTML += rowHtml;
             }
+          } else {
+            const badgeClass = e.status === 'applied' ? 'badge-applied' : 'badge-not_relevant';
+            processedBody.innerHTML += `
+              <tr>
+                <td>${e.start_date || 'TBD'}</td>
+                <td>${eventTime}</td>
+                <td>${e.name}</td>
+                <td><a href="${e.website || '#'}" target="_blank">Link ↗</a></td>
+                <td><span class="badge-status ${badgeClass}">${e.status.replace('_', ' ')}</span></td>
+              </tr>`;
+          }
+        });
+
+        if (newBody.innerHTML === '') {
+          newBody.innerHTML = '<tr><td colspan="5" style="color: #64748b;">No new events added today. Check active list below.</td></tr>';
         }
-        fetchEvents();
-    </script>
+      } catch (err) {
+        showStatus("Database Error: " + err.message, "error");
+      }
+    }
+
+    async function setStatus(id, status) {
+      await db.from('events').update({ status }).eq('id', id);
+      await loadData();
+    }
+
+    loadData();
+  </script>
 </body>
 </html>

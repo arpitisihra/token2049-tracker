@@ -1,104 +1,105 @@
-import json
-import hashlib
-from datetime import datetime
-from playwright.sync_api import sync_playwright
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TOKEN2049 Side Events Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-[#F8FAFC] text-slate-800 min-h-screen p-4 md:p-8">
+    <div class="max-w-5xl mx-auto">
+        <header class="mb-6 border-b border-slate-200 pb-4">
+            <h1 class="text-2xl font-bold text-slate-900">TOKEN2049 Side Events Tracker</h1>
+            <p class="text-xs text-slate-500 mt-1">Automatically updated daily with newly added events on top.</p>
+        </header>
 
-URL = "https://miragather.com/TOKEN2049SGSideEvents2026"
-DATA_FILE = "events.json"
+        <div id="content" class="space-y-8">Loading events...</div>
+    </div>
 
-def load_events():
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-
-def save_events(events):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(events, f, indent=2, ensure_ascii=False)
-
-def generate_id(title, date_str):
-    raw = f"{title.strip().lower()}_{date_str.strip().lower()}"
-    return hashlib.md5(raw.encode()).hexdigest()
-
-def scrape():
-    existing_events = load_events()
-    existing_ids = {e["id"] for e in existing_events}
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    
-    new_count = 0
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        
-        print(f"Opening {URL}...")
-        page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(8000)
-
-        # Select individual event containers/rows
-        cards = page.query_selector_all("tr, div[class*='event'], div[class*='row']")
-        print(f"Processing {len(cards)} elements...")
-
-        for card in cards:
-            try:
-                text = card.inner_text().strip()
-                if not text:
-                    continue
+    <script>
+        async function fetchEvents() {
+            try {
+                const res = await fetch('./events.json');
+                const events = await res.json();
                 
-                lines = [line.strip() for line in text.split("\n") if line.strip()]
-                
-                # Filter out system numbers, button text, or tiny lines
-                filtered_lines = [
-                    l for l in lines 
-                    if l not in ["Interested", "Going", "Add to calendar", "Link to website", "Open in a new tab"] 
-                    and not l.startswith("+") 
-                    and not l.isdigit()
-                ]
+                const grouped = {};
+                events.forEach(e => {
+                    const groupKey = e.added_date || "Initial Scrape";
+                    if (!grouped[groupKey]) grouped[groupKey] = [];
+                    grouped[groupKey].push(e);
+                });
 
-                if len(filtered_lines) < 2:
-                    continue
+                const contentDiv = document.getElementById('content');
+                contentDiv.innerHTML = '';
 
-                # Parse layout fields
-                event_date = filtered_lines[0]
-                event_time = "ALL DAY"
-                
-                # Check if second line is a time indicator
-                start_idx = 1
-                if any(k in filtered_lines[1].upper() for k in ["AM", "PM", "ALL DAY"]):
-                    event_time = filtered_lines[1]
-                    start_idx = 2
+                const sortedDates = Object.keys(grouped).sort().reverse();
 
-                if len(filtered_lines) <= start_idx:
-                    continue
+                sortedDates.forEach(addedDate => {
+                    const section = document.createElement('div');
+                    section.className = 'mb-8';
+                    
+                    let html = `
+                        <div class="inline-block bg-slate-200 text-slate-700 font-semibold text-xs px-3 py-1 rounded-md mb-3">
+                            ADDED ON ${addedDate}
+                        </div>
+                        <div class="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
+                            <table class="w-full text-left border-collapse">
+                                <tbody>
+                    `;
 
-                title = filtered_lines[start_idx]
-                host = filtered_lines[start_idx + 1] if len(filtered_lines) > (start_idx + 1) else ""
+                    grouped[addedDate].forEach((ev, idx) => {
+                        const bgClass = idx % 2 === 0 ? 'bg-white' : 'bg-[#F8FAFC]';
+                        const lines = ev.lines || [];
+                        
+                        const dateText = lines[0] || '';
+                        const timeText = lines[1] || 'ALL DAY';
+                        const titleText = lines[2] || lines[0] || 'Event';
+                        const hostText = lines[3] || '';
 
-                # Extract hyperlink
-                link_elem = card.query_selector("a[href*='http']")
-                link = link_elem.get_attribute("href") if link_elem else ""
+                        html += `
+                            <tr class="${bgClass} border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                                <td class="py-3 px-4 text-xs font-semibold text-slate-700 w-28 align-top">
+                                    ${dateText}
+                                </td>
+                                <td class="py-3 px-4 text-xs text-slate-500 font-medium uppercase w-32 align-top">
+                                    ${timeText}
+                                </td>
+                                <td class="py-3 px-4 align-top">
+                                    <div class="text-sm font-bold text-slate-900">
+                                        ${titleText}
+                                    </div>
+                                    ${hostText ? `<div class="text-xs text-slate-500 mt-0.5">${hostText}</div>` : ''}
+                                </td>
+                                <td class="py-3 px-4 text-right align-top w-16">
+                                    ${ev.link ? `
+                                        <a href="${ev.link}" target="_blank" class="inline-flex items-center text-slate-400 hover:text-slate-700 transition-colors" title="Open Link">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                                            </svg>
+                                        </a>
+                                    ` : ''}
+                                </td>
+                            </tr>
+                        `;
+                    });
 
-                event_id = generate_id(title, event_date)
-
-                if event_id not in existing_ids:
-                    existing_events.append({
-                        "id": event_id,
-                        "event_date": event_date,
-                        "event_time": event_time,
-                        "title": title,
-                        "host": host,
-                        "link": link,
-                        "added_date": today_str
-                    })
-                    existing_ids.add(event_id)
-                    new_count += 1
-            except Exception as e:
-                continue
-
-        browser.close()
-
-    save_events(existing_events)
-    print(f"Scrape complete for {today_str}. Added {new_count} new events.")
-
-if __name__ == "__main__":
-    scrape()
+                    html += `
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                    section.innerHTML = html;
+                    contentDiv.appendChild(section);
+                });
+            } catch (err) {
+                document.getElementById('content').innerHTML = '<p class="text-slate-500">No events scraped yet.</p>';
+            }
+        }
+        fetchEvents();
+    </script>
+</body>
+</html>

@@ -117,37 +117,61 @@
       };
     }
 
-    // Helper: Parses cell object and converts raw Date(...) syntax if present
+    // Helper: Formats cell content & handles raw Date(...) strings
     function formatCell(cObj) {
       if (!cObj) return '';
-      if (cObj.f) return String(cObj.f).trim(); 
-      
-      if (cObj.v !== null && cObj.v !== undefined) {
-        let val = String(cObj.v).trim();
-        
-        if (val.startsWith('Date(')) {
-          const nums = val.replace(/Date\(|\)/g, '').split(',').map(n => parseInt(n.trim(), 10));
-          if (nums.length >= 3 && !isNaN(nums[0])) {
-            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-            const y = nums[0];
-            const m = months[nums[1]] || 'Oct';
-            const d = nums[2];
+      let formatted = cObj.f ? String(cObj.f).trim() : '';
+      let raw = (cObj.v !== null && cObj.v !== undefined) ? String(cObj.v).trim() : '';
 
-            if (nums.length >= 5) {
-              let hh = nums[3];
-              let mm = nums[4] || 0;
-              let ampm = hh >= 12 ? 'PM' : 'AM';
-              let displayHour = hh % 12 || 12;
-              let displayMin = mm < 10 ? '0' + mm : mm;
-              return `${displayHour}:${displayMin} ${ampm}`;
-            }
+      let val = formatted || raw;
 
-            return `${m} ${d}, ${y}`;
+      if (val.startsWith('Date(')) {
+        const nums = val.replace(/Date\(|\)/g, '').split(',').map(n => parseInt(n.trim(), 10));
+        if (nums.length >= 3 && !isNaN(nums[0])) {
+          const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+          const y = nums[0];
+          const m = months[nums[1]] || 'Oct';
+          const d = nums[2];
+
+          if (nums.length >= 5) {
+            let hh = nums[3];
+            let mm = nums[4] || 0;
+            let ampm = hh >= 12 ? 'PM' : 'AM';
+            let displayHour = hh % 12 || 12;
+            let displayMin = mm < 10 ? '0' + mm : mm;
+            return `${displayHour}:${displayMin} ${ampm}`;
           }
+
+          return `${m} ${d}, ${y}`;
         }
-        return val;
       }
-      return '';
+      return val;
+    }
+
+    // Helper: Smart URL extraction to prevent relative domain redirects
+    function extractCellUrl(cObj) {
+      if (!cObj) return '#';
+      let raw = String(cObj.v || '').trim();
+      let formatted = String(cObj.f || '').trim();
+
+      // Check if raw value or formatted value contains a web address
+      let candidate = [raw, formatted].find(v => 
+        v.startsWith('http://') || 
+        v.startsWith('https://') || 
+        v.includes('lu.ma') || 
+        v.includes('t.me') || 
+        v.includes('miragather.com') ||
+        (v.includes('.') && !v.includes(' ') && v.length > 4)
+      );
+
+      if (!candidate) return '#';
+
+      // Prepend https:// if protocol is missing
+      if (!candidate.startsWith('http://') && !candidate.startsWith('https://')) {
+        candidate = 'https://' + candidate;
+      }
+
+      return candidate;
     }
 
     function parseTimes(rawStart, rawEnd) {
@@ -181,12 +205,12 @@
       const rows = data.table.rows || [];
       if (rows.length === 0) return [];
 
-      const raw2D = rows.map(r => (r.c || []).map(c => formatCell(c)));
+      const raw2D = rows.map(r => r.c || []);
 
-      // Detect header row index
+      // Find header row index if available
       let headerRowIndex = -1;
       for (let r = 0; r < Math.min(3, raw2D.length); r++) {
-        const rowStr = raw2D[r].join(' ').toLowerCase();
+        const rowStr = raw2D[r].map(c => formatCell(c)).join(' ').toLowerCase();
         if (rowStr.includes('name') || rowStr.includes('event') || rowStr.includes('link') || rowStr.includes('url')) {
           headerRowIndex = r;
           break;
@@ -196,7 +220,7 @@
       let nameIdx = -1, dateIdx = -1, startIdx = -1, endIdx = -1, linkIdx = -1;
 
       if (headerRowIndex !== -1) {
-        const headers = raw2D[headerRowIndex].map(h => h.toLowerCase().trim());
+        const headers = raw2D[headerRowIndex].map(c => formatCell(c).toLowerCase().trim());
         headers.forEach((h, i) => {
           if (h.includes('link') || h.includes('url') || h.includes('website')) linkIdx = i;
           else if (h.includes('start') && h.includes('time')) startIdx = i;
@@ -207,37 +231,50 @@
       }
 
       // Value inspection fallback
-      const dataRows = raw2D.filter((_, idx) => idx !== headerRowIndex && _.some(cell => cell.length > 0));
+      const dataRows = raw2D.filter((_, idx) => idx !== headerRowIndex && _.some(cell => formatCell(cell).length > 0));
 
       if (dataRows.length > 0) {
-        const sample = dataRows[0];
+        const sampleRow = dataRows[0];
 
         if (linkIdx === -1) {
-          linkIdx = sample.findIndex(v => v.startsWith('http://') || v.startsWith('https://') || v.includes('lu.ma') || v.includes('t.me'));
+          linkIdx = sampleRow.findIndex(c => {
+            const url = extractCellUrl(c);
+            return url !== '#';
+          });
         }
 
         if (dateIdx === -1) {
-          dateIdx = sample.findIndex((v, i) => i !== linkIdx && (v.includes('202') || v.match(/Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mon|Tue|Wed|Thu|Fri|Sat|Sun/i)));
+          dateIdx = sampleRow.findIndex((c, i) => {
+            const val = formatCell(c);
+            return i !== linkIdx && (val.includes('202') || val.match(/Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mon|Tue|Wed|Thu|Fri|Sat|Sun/i));
+          });
         }
 
         if (startIdx === -1) {
-          startIdx = sample.findIndex((v, i) => i !== linkIdx && i !== dateIdx && (v.match(/\d{1,2}:\d{2}/) || v.toLowerCase().includes('am') || v.toLowerCase().includes('pm')));
+          startIdx = sampleRow.findIndex((c, i) => {
+            const val = formatCell(c);
+            return i !== linkIdx && i !== dateIdx && (val.match(/\d{1,2}:\d{2}/) || val.toLowerCase().includes('am') || val.toLowerCase().includes('pm'));
+          });
         }
 
         if (endIdx === -1 && startIdx !== -1) {
-          endIdx = sample.findIndex((v, i) => i !== linkIdx && i !== dateIdx && i !== startIdx && (v.match(/\d{1,2}:\d{2}/) || v.toLowerCase().includes('am') || v.toLowerCase().includes('pm')));
+          endIdx = sampleRow.findIndex((c, i) => {
+            const val = formatCell(c);
+            return i !== linkIdx && i !== dateIdx && i !== startIdx && (val.match(/\d{1,2}:\d{2}/) || val.toLowerCase().includes('am') || val.toLowerCase().includes('pm'));
+          });
         }
 
         if (nameIdx === -1) {
-          nameIdx = sample.findIndex((v, i) => {
+          nameIdx = sampleRow.findIndex((c, i) => {
+            const val = formatCell(c);
             if (i === linkIdx || i === dateIdx || i === startIdx || i === endIdx) return false;
-            if (v.length > 15 && !v.includes(' ') && v.match(/^[a-f0-9]+$/i)) return false; // Ignore hex hash IDs
-            return v.length > 0;
+            if (val.length > 15 && !val.includes(' ') && val.match(/^[a-f0-9]+$/i)) return false; 
+            return val.length > 0;
           });
         }
       }
 
-      // Safety positional fallbacks
+      // Fallback defaults
       if (dateIdx === -1) dateIdx = 1;
       if (startIdx === -1) startIdx = 2;
       if (endIdx === -1) endIdx = 3;
@@ -248,13 +285,13 @@
       const seenIds = new Set();
 
       dataRows.forEach(row => {
-        const name = (row[nameIdx] || '').trim();
+        const name = formatCell(row[nameIdx]);
         if (!name || name.toLowerCase().includes('event name') || name.toLowerCase().startsWith('date(')) return;
 
-        const date = (row[dateIdx] || '').trim() || 'TBD';
-        const rawStart = (row[startIdx] || '').trim();
-        const rawEnd = (row[endIdx] || '').trim();
-        const link = (row[linkIdx] || '').trim() || '#';
+        const date = formatCell(row[dateIdx]) || 'TBD';
+        const rawStart = formatCell(row[startIdx]);
+        const rawEnd = formatCell(row[endIdx]);
+        const link = extractCellUrl(row[linkIdx]);
 
         const { startTime, endTime } = parseTimes(rawStart, rawEnd);
         const id = 'sheet_' + btoa(unescape(encodeURIComponent(name + link))).replace(/=/g, '').slice(-20);
@@ -333,7 +370,7 @@
               <td><strong>${escapeHtml(cleanTimeString(startTime) || 'ALL DAY')}</strong></td>
               <td>${escapeHtml(cleanTimeString(endTime) || '-')}</td>
               <td><span class="badge-new">NEW</span> <strong>${escapeHtml(e.name)}</strong></td>
-              <td><a href="${escapeHtml(e.website)}" target="_blank">Link ↗</a></td>
+              <td>${renderLinkAnchor(e.website)}</td>
               <td>
                 <button class="btn-action btn-add" onclick="saveAndSet('${e.id}', 'active')">Add to Original</button>
                 <button class="btn-action btn-applied" onclick="saveAndSet('${e.id}', 'applied')">Applied</button>
@@ -380,7 +417,7 @@
                 <td><strong>${escapeHtml(startDisplay)}</strong></td>
                 <td>${escapeHtml(endDisplay)}</td>
                 <td><strong>${escapeHtml(e.name)}</strong></td>
-                <td><a href="${escapeHtml(e.website || '#')}" target="_blank">Link ↗</a></td>
+                <td>${renderLinkAnchor(e.website)}</td>
                 <td>
                   <button class="btn-action btn-applied" onclick="setStatus('${e.id}', 'applied')">Applied</button>
                   <button class="btn-action btn-irrelevant" onclick="setStatus('${e.id}', 'not_relevant')">Not Relevant</button>
@@ -394,7 +431,7 @@
                 <td>${escapeHtml(startDisplay)}</td>
                 <td>${escapeHtml(endDisplay)}</td>
                 <td>${escapeHtml(e.name)}</td>
-                <td><a href="${escapeHtml(e.website || '#')}" target="_blank">Link ↗</a></td>
+                <td>${renderLinkAnchor(e.website)}</td>
                 <td><span class="badge-status ${badgeClass}">${e.status.replace('_', ' ')}</span></td>
               </tr>`;
           }
@@ -402,6 +439,13 @@
       } catch (err) {
         handleError(err, "Database Error: ");
       }
+    }
+
+    function renderLinkAnchor(url) {
+      if (!url || url === '#' || url.toLowerCase() === 'link') {
+        return `<span style="color: #94a3b8;">No Link</span>`;
+      }
+      return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Link ↗</a>`;
     }
 
     async function setStatus(id, status) {

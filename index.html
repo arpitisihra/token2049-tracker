@@ -14,6 +14,8 @@
     button:hover { background: #1d4ed8; }
     button.alt { background: #059669; }
     button.alt:hover { background: #047857; }
+    button.neutral { background: #475569; }
+    button.neutral:hover { background: #334155; }
     #status-msg { padding: 10px; border-radius: 6px; font-weight: bold; margin-bottom: 20px; display: none; }
     .status-info { background: #e0f2fe; color: #0369a1; display: block !important; }
     .status-error { background: #fee2e2; color: #b91c1c; display: block !important; }
@@ -27,6 +29,8 @@
     .btn-applied:hover { background: #15803d; }
     .btn-irrelevant { background: #dc2626; }
     .btn-irrelevant:hover { background: #b91c1c; }
+    .btn-add { background: #2563eb; }
+    .btn-add:hover { background: #1d4ed8; }
     .badge-status { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
     .badge-applied { background: #dcfce7; color: #15803d; }
     .badge-not_relevant { background: #fee2e2; color: #b91c1c; }
@@ -41,28 +45,55 @@
   <div class="controls">
     <div class="row">
       <input type="text" id="sheetUrlInput" value="https://docs.google.com/spreadsheets/d/1y3D1zB9IIGJbLeF8aicSYoXxtiZ5kAS25Wj4a5hvovg/edit?gid=0#gid=0" placeholder="Paste Public Google Sheet URL..." />
-      <button onclick="syncFromGoogleSheet()">Sync Google Sheet</button>
+      <button onclick="setBaselineFromSheet()">Set Day 0 Baseline</button>
       <button class="alt" onclick="checkForNewEvents()">Check New Events</button>
     </div>
   </div>
 
   <div id="status-msg"></div>
 
-  <h2>🔥 Newly Discovered Events (Not in DB yet)</h2>
+  <h2>🔥 Newly Discovered Events (Added after Day 0)</h2>
   <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Start Time</th>
+        <th>Ending Time</th>
+        <th>Event Name</th>
+        <th>Event Link</th>
+        <th>Action</th>
+      </tr>
+    </thead>
     <tbody id="new-table"></tbody>
   </table>
 
-  <h2>📋 Active Events</h2>
+  <h2>📋 Original List (Active Events)</h2>
   <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Start Time</th>
+        <th>Ending Time</th>
+        <th>Event Name</th>
+        <th>Event Link</th>
+        <th>Action</th>
+      </tr>
+    </thead>
     <tbody id="active-table"></tbody>
   </table>
 
   <h2>📂 Processed Events (Applied / Not Relevant)</h2>
   <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Status</th></tr></thead>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Start Time</th>
+        <th>Ending Time</th>
+        <th>Event Name</th>
+        <th>Event Link</th>
+        <th>Status</th>
+      </tr>
+    </thead>
     <tbody id="processed-table"></tbody>
   </table>
 
@@ -72,7 +103,6 @@
     const SUPABASE_KEY = "sb_publishable_58-m2gaLM6QjRGUPORpM8w_I-vjhwY3";
     const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    // In-memory store for newly discovered events to avoid HTML string escaping issues
     let pendingEventsCache = new Map();
 
     function showStatus(text, type = 'info') {
@@ -81,7 +111,6 @@
       el.innerText = text;
     }
 
-    // Helper: Extract Spreadsheet ID & GID
     function parseSheetDetails(url) {
       const idMatch = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
       const gidMatch = url.match(/[#&?]gid=([0-9]+)/);
@@ -91,7 +120,24 @@
       };
     }
 
-    // Fetch public rows directly from Google's GViz API
+    // Helper to format/split start and end times
+    function parseTimes(rawStart, rawEnd) {
+      let startTime = String(rawStart || '').trim();
+      let endTime = String(rawEnd || '').trim();
+
+      // If single column has range like "10:00 AM - 2:00 PM"
+      if ((startTime.includes('-') || startTime.includes('–')) && !endTime) {
+        const parts = startTime.split(/[-–]/);
+        startTime = parts[0].trim();
+        endTime = parts[1] ? parts[1].trim() : '-';
+      }
+
+      return {
+        startTime: startTime || 'ALL DAY',
+        endTime: endTime || '-'
+      };
+    }
+
     async function fetchGoogleSheetData(url) {
       const { spreadsheetId, gid } = parseSheetDetails(url);
       if (!spreadsheetId) throw new Error("Invalid Google Sheet URL.");
@@ -109,11 +155,12 @@
 
       const nameIdx = cols.findIndex(c => c.includes('name') || c.includes('title') || c.includes('event'));
       const dateIdx = cols.findIndex(c => c.includes('date'));
-      const timeIdx = cols.findIndex(c => c.includes('time'));
+      const startIdx = cols.findIndex(c => c.includes('start') || (c.includes('time') && !c.includes('end')));
+      const endIdx = cols.findIndex(c => c.includes('end') || c.includes('ending') || c.includes('finish'));
       const linkIdx = cols.findIndex(c => c.includes('link') || c.includes('url') || c.includes('website'));
 
       const events = [];
-      const seenIds = new Set(); // Prevents duplicate IDs in same fetch
+      const seenIds = new Set();
 
       rows.forEach((row) => {
         const c = row.c || [];
@@ -123,22 +170,32 @@
         if (!name) return;
 
         const date = getValue(dateIdx !== -1 ? dateIdx : 1) || 'TBD';
-        const time = getValue(timeIdx !== -1 ? timeIdx : 2) || 'ALL DAY';
+        const rawStart = getValue(startIdx !== -1 ? startIdx : 2);
+        const rawEnd = getValue(endIdx !== -1 ? endIdx : -1);
         const link = getValue(linkIdx !== -1 ? linkIdx : 3) || '#';
 
+        const { startTime, endTime } = parseTimes(rawStart, rawEnd);
         const id = 'sheet_' + btoa(unescape(encodeURIComponent(name + link))).replace(/=/g, '').slice(-20);
 
         if (seenIds.has(id)) return;
         seenIds.add(id);
 
-        events.push({ id, name, start_date: date, location: time, website: link });
+        // Store startTime and endTime separated by '|||' inside 'location' field for schema compatibility
+        events.push({
+          id,
+          name,
+          start_date: date,
+          location: `${startTime}|||${endTime}`,
+          website: link
+        });
       });
 
       return events;
     }
 
-    async function syncFromGoogleSheet() {
-      showStatus("Fetching data from Google Sheet...", "info");
+    // Set Baseline (Day 0)
+    async function setBaselineFromSheet() {
+      showStatus("Setting Day 0 Baseline from Google Sheet...", "info");
       const url = document.getElementById('sheetUrlInput').value;
 
       try {
@@ -161,15 +218,16 @@
         const { error: upsertErr } = await db.from('events').upsert(recordsToSave, { onConflict: 'id' });
         if (upsertErr) throw upsertErr;
 
-        showStatus(`Synced ${events.length} unique events from Google Sheet successfully!`, "success");
+        showStatus(`Day 0 Baseline saved! ${events.length} events loaded into Original List.`, "success");
         await loadData();
       } catch (err) {
-        handleError(err, "Sync Error: ");
+        handleError(err, "Baseline Error: ");
       }
     }
 
+    // Check for events added after Day 0
     async function checkForNewEvents() {
-      showStatus("Checking Google Sheet for new items...", "info");
+      showStatus("Checking for newly added events...", "info");
       const url = document.getElementById('sheetUrlInput').value;
 
       try {
@@ -188,14 +246,17 @@
             newCount++;
             pendingEventsCache.set(e.id, e);
             
+            const [startTime, endTime] = (e.location || '').split('|||');
             const tr = document.createElement('tr');
             tr.id = `row-${e.id}`;
             tr.innerHTML = `
               <td>${escapeHtml(e.start_date)}</td>
-              <td><strong>${escapeHtml(e.location)}</strong></td>
+              <td><strong>${escapeHtml(startTime || 'ALL DAY')}</strong></td>
+              <td>${escapeHtml(endTime || '-')}</td>
               <td><span class="badge-new">NEW</span> <strong>${escapeHtml(e.name)}</strong></td>
               <td><a href="${escapeHtml(e.website)}" target="_blank">Link ↗</a></td>
               <td>
+                <button class="btn-action btn-add" onclick="saveAndSet('${e.id}', 'active')">Add to Original</button>
                 <button class="btn-action btn-applied" onclick="saveAndSet('${e.id}', 'applied')">Applied</button>
                 <button class="btn-action btn-irrelevant" onclick="saveAndSet('${e.id}', 'not_relevant')">Not Relevant</button>
               </td>
@@ -205,9 +266,9 @@
         }
 
         if (newCount > 0) {
-          showStatus(`Found ${newCount} new events! Review them in the top section.`, "success");
+          showStatus(`Found ${newCount} new event(s) added after Day 0!`, "success");
         } else {
-          showStatus("No new events found. Database is up to date!", "success");
+          showStatus("No new events found. Original list is up to date!", "success");
         }
       } catch (err) {
         handleError(err, "Check Error: ");
@@ -225,12 +286,16 @@
         processedBody.innerHTML = '';
 
         (events || []).forEach(e => {
-          const eventTime = e.location || 'ALL DAY';
+          const parts = (e.location || '').split('|||');
+          const startTime = parts[0] || e.location || 'ALL DAY';
+          const endTime = parts[1] || '-';
+
           if (e.status === 'active') {
             activeBody.innerHTML += `
               <tr>
                 <td>${escapeHtml(e.start_date || 'TBD')}</td>
-                <td><strong>${escapeHtml(eventTime)}</strong></td>
+                <td><strong>${escapeHtml(startTime)}</strong></td>
+                <td>${escapeHtml(endTime)}</td>
                 <td><strong>${escapeHtml(e.name)}</strong></td>
                 <td><a href="${escapeHtml(e.website || '#')}" target="_blank">Link ↗</a></td>
                 <td>
@@ -243,7 +308,8 @@
             processedBody.innerHTML += `
               <tr>
                 <td>${escapeHtml(e.start_date || 'TBD')}</td>
-                <td>${escapeHtml(eventTime)}</td>
+                <td>${escapeHtml(startTime)}</td>
+                <td>${escapeHtml(endTime)}</td>
                 <td>${escapeHtml(e.name)}</td>
                 <td><a href="${escapeHtml(e.website || '#')}" target="_blank">Link ↗</a></td>
                 <td><span class="badge-status ${badgeClass}">${e.status.replace('_', ' ')}</span></td>
@@ -273,7 +339,6 @@
         status: status
       }, { onConflict: 'id' });
 
-      // Remove from newly discovered UI
       const row = document.getElementById(`row-${id}`);
       if (row) row.remove();
       pendingEventsCache.delete(id);

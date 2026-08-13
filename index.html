@@ -1,278 +1,213 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Team Event Tracker</title>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <style>
-    body { font-family: system-ui, -apple-system, sans-serif; margin: 2rem; background: #f8fafc; color: #0f172a; }
-    .controls { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-    .row { display: flex; gap: 10px; }
-    input { flex: 1; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 14px; font-family: inherit; }
-    button { padding: 10px 16px; background: #2563eb; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
-    button:hover { background: #1d4ed8; }
-    button.alt { background: #059669; }
-    button.alt:hover { background: #047857; }
-    #status-msg { padding: 10px; border-radius: 6px; font-weight: bold; margin-bottom: 20px; display: none; }
-    .status-info { background: #e0f2fe; color: #0369a1; display: block !important; }
-    .status-error { background: #fee2e2; color: #b91c1c; display: block !important; }
-    .status-success { background: #dcfce7; color: #15803d; display: block !important; }
-    h2 { margin-top: 30px; font-size: 18px; color: #1e293b; }
-    table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
-    th { background: #f1f5f9; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
-    .btn-action { padding: 6px 12px; font-size: 12px; margin-right: 5px; border-radius: 4px; border: none; cursor: pointer; color: white; font-weight: 600; }
-    .btn-applied { background: #16a34a; }
-    .btn-applied:hover { background: #15803d; }
-    .btn-irrelevant { background: #dc2626; }
-    .btn-irrelevant:hover { background: #b91c1c; }
-    .badge-status { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; }
-    .badge-applied { background: #dcfce7; color: #15803d; }
-    .badge-not_relevant { background: #fee2e2; color: #b91c1c; }
-    .badge-new { background: #f59e0b; color: white; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; }
-    a { color: #2563eb; text-decoration: none; font-weight: 500; }
-    a:hover { text-decoration: underline; }
-  </style>
-</head>
-<body>
+<script>
+  // Configured with your project details
+  const SUPABASE_URL = "https://reirnubvmdallsrzqzop.supabase.co"; 
+  const SUPABASE_KEY = "sb_publishable_58-m2gaLM6QjRGUPORpM8w_I-vjhwY3";
+  const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  <h1>Team Event Tracker</h1>
-  <div class="controls">
-    <div class="row">
-      <input type="text" id="sheetUrlInput" value="https://docs.google.com/spreadsheets/d/1y3D1zB9IIGJbLeF8aicSYoXxtiZ5kAS25Wj4a5hvovg/edit?gid=0#gid=0" placeholder="Paste Public Google Sheet URL..." />
-      <button onclick="syncFromGoogleSheet()">Sync Google Sheet</button>
-      <button class="alt" onclick="checkForNewEvents()">Check New Events</button>
-    </div>
-  </div>
+  function showStatus(text, type = 'info') {
+    const el = document.getElementById('status-msg');
+    el.className = `status-${type}`;
+    el.innerText = text;
+  }
 
-  <div id="status-msg"></div>
+  // Helper: Extract Spreadsheet ID & GID from Google Sheet URL
+  function parseSheetDetails(url) {
+    const idMatch = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
+    const gidMatch = url.match(/[#&?]gid=([0-9]+)/);
+    return {
+      spreadsheetId: idMatch ? idMatch[1] : null,
+      gid: gidMatch ? gidMatch[1] : '0'
+    };
+  }
 
-  <h2>🔥 Newly Discovered Events (Not in DB yet)</h2>
-  <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
-    <tbody id="new-table"></tbody>
-  </table>
+  // Fetch public rows directly from Google's GViz API
+  async function fetchGoogleSheetData(url) {
+    const { spreadsheetId, gid } = parseSheetDetails(url);
+    if (!spreadsheetId) throw new Error("Invalid Google Sheet URL.");
 
-  <h2>📋 Active Events</h2>
-  <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Action</th></tr></thead>
-    <tbody id="active-table"></tbody>
-  </table>
+    const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&gid=${gid}`;
+    const response = await fetch(gvizUrl);
+    if (!response.ok) throw new Error("Could not access Google Sheet. Ensure 'Anyone with the link can view' is enabled.");
 
-  <h2>📂 Processed Events (Applied / Not Relevant)</h2>
-  <table>
-    <thead><tr><th>Date</th><th>Time</th><th>Event Name</th><th>Link</th><th>Status</th></tr></thead>
-    <tbody id="processed-table"></tbody>
-  </table>
+    const text = await response.text();
+    const jsonText = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+    const data = JSON.parse(jsonText);
 
-  <script>
-    // Configured with your project details
-    const SUPABASE_URL = "https://reirnubvmdallsrzqzop.supabase.co"; 
-    const SUPABASE_KEY = "sb_publishable_58-m2gaLM6QjRGUPORpM8w_I-vjhwY3";
-    const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const cols = data.table.cols.map(c => (c.label || '').trim().toLowerCase());
+    const rows = data.table.rows;
 
-    function showStatus(text, type = 'info') {
-      const el = document.getElementById('status-msg');
-      el.className = `status-${type}`;
-      el.innerText = text;
-    }
+    // Locate column indexes dynamically
+    const nameIdx = cols.findIndex(c => c.includes('name') || c.includes('title') || c.includes('event'));
+    const dateIdx = cols.findIndex(c => c.includes('date'));
+    const timeIdx = cols.findIndex(c => c.includes('time'));
+    const linkIdx = cols.findIndex(c => c.includes('link') || c.includes('url') || c.includes('website'));
 
-    // Helper: Extract Spreadsheet ID & GID from Google Sheet URL
-    function parseSheetDetails(url) {
-      const idMatch = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      const gidMatch = url.match(/[#&?]gid=([0-9]+)/);
-      return {
-        spreadsheetId: idMatch ? idMatch[1] : null,
-        gid: gidMatch ? gidMatch[1] : '0'
-      };
-    }
+    const events = [];
+    const seenIds = new Set(); // Prevent duplicate IDs in the same fetch batch
 
-    // Fetch public rows directly from Google's GViz API
-    async function fetchGoogleSheetData(url) {
-      const { spreadsheetId, gid } = parseSheetDetails(url);
-      if (!spreadsheetId) throw new Error("Invalid Google Sheet URL.");
+    rows.forEach((row) => {
+      const c = row.c || [];
+      const getValue = (idx) => (idx !== -1 && c[idx] && c[idx].v !== null) ? String(c[idx].v).trim() : '';
 
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&gid=${gid}`;
-      const response = await fetch(gvizUrl);
-      if (!response.ok) throw new Error("Could not access Google Sheet. Ensure 'Anyone with the link can view' is enabled.");
+      const name = getValue(nameIdx !== -1 ? nameIdx : 0);
+      if (!name) return; // Skip empty rows
 
-      const text = await response.text();
-      const jsonText = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
-      const data = JSON.parse(jsonText);
+      const date = getValue(dateIdx !== -1 ? dateIdx : 1) || 'TBD';
+      const time = getValue(timeIdx !== -1 ? timeIdx : 2) || 'ALL DAY';
+      const link = getValue(linkIdx !== -1 ? linkIdx : 3) || '#';
 
-      const cols = data.table.cols.map(c => (c.label || '').trim().toLowerCase());
-      const rows = data.table.rows;
+      // Generate deterministic unique ID using Name + Link
+      const id = 'sheet_' + btoa(unescape(encodeURIComponent(name + link))).replace(/=/g, '').slice(-20);
 
-      // Locate column indexes dynamically
-      const nameIdx = cols.findIndex(c => c.includes('name') || c.includes('title') || c.includes('event'));
-      const dateIdx = cols.findIndex(c => c.includes('date'));
-      const timeIdx = cols.findIndex(c => c.includes('time'));
-      const linkIdx = cols.findIndex(c => c.includes('link') || c.includes('url') || c.includes('website'));
+      // --- DEDUPLICATION FIX ---
+      if (seenIds.has(id)) return;
+      seenIds.add(id);
 
-      const events = [];
-
-      rows.forEach((row) => {
-        const c = row.c || [];
-        const getValue = (idx) => (idx !== -1 && c[idx] && c[idx].v !== null) ? String(c[idx].v).trim() : '';
-
-        const name = getValue(nameIdx !== -1 ? nameIdx : 0);
-        if (!name) return; // Skip empty rows
-
-        const date = getValue(dateIdx !== -1 ? dateIdx : 1) || 'TBD';
-        const time = getValue(timeIdx !== -1 ? timeIdx : 2) || 'ALL DAY';
-        const link = getValue(linkIdx !== -1 ? linkIdx : 3) || '#';
-
-        // Generate deterministic unique ID using Name + Link
-        const id = 'sheet_' + btoa(unescape(encodeURIComponent(name + link))).replace(/=/g, '').slice(-20);
-
-        events.push({
-          id: id,
-          name: name,
-          start_date: date,
-          location: time,
-          website: link
-        });
+      events.push({
+        id: id,
+        name: name,
+        start_date: date,
+        location: time,
+        website: link
       });
+    });
 
-      return events;
-    }
+    return events;
+  }
 
-    async function syncFromGoogleSheet() {
-      showStatus("Fetching data from Google Sheet...", "info");
-      const url = document.getElementById('sheetUrlInput').value;
+  async function syncFromGoogleSheet() {
+    showStatus("Fetching data from Google Sheet...", "info");
+    const url = document.getElementById('sheetUrlInput').value;
 
-      try {
-        const events = await fetchGoogleSheetData(url);
+    try {
+      const events = await fetchGoogleSheetData(url);
 
-        // Fetch existing record statuses to preserve 'applied' or 'not_relevant' flags
-        const { data: existing, error: fetchErr } = await db.from('events').select('id, status');
-        if (fetchErr) throw fetchErr;
+      // Fetch existing record statuses to preserve 'applied' or 'not_relevant' flags
+      const { data: existing, error: fetchErr } = await db.from('events').select('id, status');
+      if (fetchErr) throw fetchErr;
 
-        const existingStatusMap = new Map((existing || []).map(x => [x.id, x.status]));
+      const existingStatusMap = new Map((existing || []).map(x => [x.id, x.status]));
 
-        const recordsToSave = events.map(e => ({
-          id: e.id,
-          name: e.name,
-          start_date: e.start_date,
-          location: e.location,
-          website: e.website,
-          status: existingStatusMap.get(e.id) || 'active'
-        }));
+      const recordsToSave = events.map(e => ({
+        id: e.id,
+        name: e.name,
+        start_date: e.start_date,
+        location: e.location,
+        website: e.website,
+        status: existingStatusMap.get(e.id) || 'active'
+      }));
 
-        const { error: upsertErr } = await db.from('events').upsert(recordsToSave, { onConflict: 'id' });
-        if (upsertErr) throw upsertErr;
+      const { error: upsertErr } = await db.from('events').upsert(recordsToSave, { onConflict: 'id' });
+      if (upsertErr) throw upsertErr;
 
-        showStatus(`Synced ${events.length} events from Google Sheet successfully!`, "success");
-        await loadData();
-      } catch (err) {
-        handleError(err, "Google Sheet Sync Error: ");
-      }
-    }
-
-    async function checkForNewEvents() {
-      showStatus("Checking Google Sheet for new items...", "info");
-      const url = document.getElementById('sheetUrlInput').value;
-
-      try {
-        const events = await fetchGoogleSheetData(url);
-        const { data: existing, error: fetchErr } = await db.from('events').select('id');
-        if (fetchErr) throw fetchErr;
-
-        const existingIds = new Set((existing || []).map(x => x.id));
-        const newBody = document.getElementById('new-table');
-        newBody.innerHTML = '';
-        let newCount = 0;
-
-        for (let e of events) {
-          if (!existingIds.has(e.id)) {
-            newCount++;
-            const cleanName = e.name.replace(/'/g, "\\'");
-            newBody.innerHTML += `
-              <tr>
-                <td>${e.start_date}</td>
-                <td><strong>${e.location}</strong></td>
-                <td><span class="badge-new">NEW</span> <strong>${e.name}</strong></td>
-                <td><a href="${e.website}" target="_blank">Link ↗</a></td>
-                <td>
-                  <button class="btn-action btn-applied" onclick="saveAndSet('${e.id}', '${cleanName}', '${e.start_date}', '${e.location}', '${e.website}', 'applied')">Applied</button>
-                  <button class="btn-action btn-irrelevant" onclick="saveAndSet('${e.id}', '${cleanName}', '${e.start_date}', '${e.location}', '${e.website}', 'not_relevant')">Not Relevant</button>
-                </td>
-              </tr>`;
-          }
-        }
-
-        if (newCount > 0) {
-          showStatus(`Found ${newCount} new events! Review them in the top section.`, "success");
-        } else {
-          showStatus("No new events found. Database is up to date!", "success");
-        }
-      } catch (err) {
-        handleError(err, "Check Error: ");
-      }
-    }
-
-    async function loadData() {
-      try {
-        const { data: events, error } = await db.from('events').select('*').order('created_at', { ascending: false });
-        if (error) throw error;
-
-        const activeBody = document.getElementById('active-table');
-        const processedBody = document.getElementById('processed-table');
-        activeBody.innerHTML = '';
-        processedBody.innerHTML = '';
-
-        (events || []).forEach(e => {
-          const eventTime = e.location || 'ALL DAY';
-          if (e.status === 'active') {
-            activeBody.innerHTML += `
-              <tr>
-                <td>${e.start_date || 'TBD'}</td>
-                <td><strong>${eventTime}</strong></td>
-                <td><strong>${e.name}</strong></td>
-                <td><a href="${e.website || '#'}" target="_blank">Link ↗</a></td>
-                <td>
-                  <button class="btn-action btn-applied" onclick="setStatus('${e.id}', 'applied')">Applied</button>
-                  <button class="btn-action btn-irrelevant" onclick="setStatus('${e.id}', 'not_relevant')">Not Relevant</button>
-                </td>
-              </tr>`;
-          } else {
-            const badgeClass = e.status === 'applied' ? 'badge-applied' : 'badge-not_relevant';
-            processedBody.innerHTML += `
-              <tr>
-                <td>${e.start_date || 'TBD'}</td>
-                <td>${eventTime}</td>
-                <td>${e.name}</td>
-                <td><a href="${e.website || '#'}" target="_blank">Link ↗</a></td>
-                <td><span class="badge-status ${badgeClass}">${e.status.replace('_', ' ')}</span></td>
-              </tr>`;
-          }
-        });
-      } catch (err) {
-        handleError(err, "Database Error: ");
-      }
-    }
-
-    async function setStatus(id, status) {
-      await db.from('events').update({ status }).eq('id', id);
+      showStatus(`Synced ${events.length} unique events from Google Sheet successfully!`, "success");
       await loadData();
+    } catch (err) {
+      handleError(err, "Google Sheet Sync Error: ");
     }
+  }
 
-    async function saveAndSet(id, name, start_date, time, website, status) {
-      await db.from('events').upsert({ id, name, start_date, location: time, website, status }, { onConflict: 'id' });
-      await loadData();
-      document.getElementById('new-table').innerHTML = '';
-    }
+  async function checkForNewEvents() {
+    showStatus("Checking Google Sheet for new items...", "info");
+    const url = document.getElementById('sheetUrlInput').value;
 
-    function handleError(err, prefix = '') {
-      if (err.message && (err.message.includes('Failed to fetch') || err.name === 'TypeError')) {
-        showStatus("Cannot reach Supabase! Ensure your project is active and 'events' table exists.", "error");
+    try {
+      const events = await fetchGoogleSheetData(url);
+      const { data: existing, error: fetchErr } = await db.from('events').select('id');
+      if (fetchErr) throw fetchErr;
+
+      const existingIds = new Set((existing || []).map(x => x.id));
+      const newBody = document.getElementById('new-table');
+      newBody.innerHTML = '';
+      let newCount = 0;
+
+      for (let e of events) {
+        if (!existingIds.has(e.id)) {
+          newCount++;
+          const cleanName = e.name.replace(/'/g, "\\'");
+          newBody.innerHTML += `
+            <tr>
+              <td>${e.start_date}</td>
+              <td><strong>${e.location}</strong></td>
+              <td><span class="badge-new">NEW</span> <strong>${e.name}</strong></td>
+              <td><a href="${e.website}" target="_blank">Link ↗</a></td>
+              <td>
+                <button class="btn-action btn-applied" onclick="saveAndSet('${e.id}', '${cleanName}', '${e.start_date}', '${e.location}', '${e.website}', 'applied')">Applied</button>
+                <button class="btn-action btn-irrelevant" onclick="saveAndSet('${e.id}', '${cleanName}', '${e.start_date}', '${e.location}', '${e.website}', 'not_relevant')">Not Relevant</button>
+              </td>
+            </tr>`;
+        }
+      }
+
+      if (newCount > 0) {
+        showStatus(`Found ${newCount} new events! Review them in the top section.`, "success");
       } else {
-        showStatus(prefix + err.message, "error");
+        showStatus("No new events found. Database is up to date!", "success");
       }
+    } catch (err) {
+      handleError(err, "Check Error: ");
     }
+  }
 
-    loadData();
-  </script>
-</body>
-</html>
+  async function loadData() {
+    try {
+      const { data: events, error } = await db.from('events').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+
+      const activeBody = document.getElementById('active-table');
+      const processedBody = document.getElementById('processed-table');
+      activeBody.innerHTML = '';
+      processedBody.innerHTML = '';
+
+      (events || []).forEach(e => {
+        const eventTime = e.location || 'ALL DAY';
+        if (e.status === 'active') {
+          activeBody.innerHTML += `
+            <tr>
+              <td>${e.start_date || 'TBD'}</td>
+              <td><strong>${eventTime}</strong></td>
+              <td><strong>${e.name}</strong></td>
+              <td><a href="${e.website || '#'}" target="_blank">Link ↗</a></td>
+              <td>
+                <button class="btn-action btn-applied" onclick="setStatus('${e.id}', 'applied')">Applied</button>
+                <button class="btn-action btn-irrelevant" onclick="setStatus('${e.id}', 'not_relevant')">Not Relevant</button>
+              </td>
+            </tr>`;
+        } else {
+          const badgeClass = e.status === 'applied' ? 'badge-applied' : 'badge-not_relevant';
+          processedBody.innerHTML += `
+            <tr>
+              <td>${e.start_date || 'TBD'}</td>
+              <td>${eventTime}</td>
+              <td>${e.name}</td>
+              <td><a href="${e.website || '#'}" target="_blank">Link ↗</a></td>
+              <td><span class="badge-status ${badgeClass}">${e.status.replace('_', ' ')}</span></td>
+            </tr>`;
+        }
+      });
+    } catch (err) {
+      handleError(err, "Database Error: ");
+    }
+  }
+
+  async function setStatus(id, status) {
+    await db.from('events').update({ status }).eq('id', id);
+    await loadData();
+  }
+
+  async function saveAndSet(id, name, start_date, time, website, status) {
+    await db.from('events').upsert({ id, name, start_date, location: time, website, status }, { onConflict: 'id' });
+    await loadData();
+    document.getElementById('new-table').innerHTML = '';
+  }
+
+  function handleError(err, prefix = '') {
+    if (err.message && (err.message.includes('Failed to fetch') || err.name === 'TypeError')) {
+      showStatus("Cannot reach Supabase! Ensure your project is active and 'events' table exists.", "error");
+    } else {
+      showStatus(prefix + err.message, "error");
+    }
+  }
+
+  loadData();
+</script>

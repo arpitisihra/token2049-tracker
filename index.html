@@ -67,8 +67,9 @@
   </table>
 
   <script>
-    const SUPABASE_URL = "https://vsvaqpsmrokvrbzwjfzv.supabase.co";
-    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZzdmFxcHNtcm9rdnJiendqZnp2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNDQ0MTMsImV4cCI6MjEwMDgyMDQxM30.BRlFMLivOdSgpxA_p6T85NnKZ7nFIqJgN9B06rbcEv0";
+    // Configured with your project details
+    const SUPABASE_URL = "https://reirnubvmdallsrzqzop.supabase.co"; 
+    const SUPABASE_KEY = "sb_publishable_58-m2gaLM6QjRGUPORpM8w_I-vjhwY3";
     const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     function showStatus(text, type = 'info') {
@@ -77,7 +78,7 @@
       el.innerText = text;
     }
 
-    // Helper: Extract Spreadsheet ID & GID from full URL
+    // Helper: Extract Spreadsheet ID & GID from Google Sheet URL
     function parseSheetDetails(url) {
       const idMatch = url.match(/\/d\/([a-zA-Z0-9-_]+)/);
       const gidMatch = url.match(/[#&?]gid=([0-9]+)/);
@@ -87,24 +88,23 @@
       };
     }
 
-    // Fetch and parse rows directly from Google's public JSON endpoint
+    // Fetch public rows directly from Google's GViz API
     async function fetchGoogleSheetData(url) {
       const { spreadsheetId, gid } = parseSheetDetails(url);
       if (!spreadsheetId) throw new Error("Invalid Google Sheet URL.");
 
       const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json&gid=${gid}`;
       const response = await fetch(gvizUrl);
-      if (!response.ok) throw new Error("Could not access Google Sheet. Ensure it is set to 'Anyone with the link can view'.");
+      if (!response.ok) throw new Error("Could not access Google Sheet. Ensure 'Anyone with the link can view' is enabled.");
 
       const text = await response.text();
-      // Google wraps JSON in '/*O_o*/\ngoogle.visualization.Query.setResponse({...});'
       const jsonText = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
       const data = JSON.parse(jsonText);
 
       const cols = data.table.cols.map(c => (c.label || '').trim().toLowerCase());
       const rows = data.table.rows;
 
-      // Dynamically locate column indexes
+      // Locate column indexes dynamically
       const nameIdx = cols.findIndex(c => c.includes('name') || c.includes('title') || c.includes('event'));
       const dateIdx = cols.findIndex(c => c.includes('date'));
       const timeIdx = cols.findIndex(c => c.includes('time'));
@@ -112,7 +112,7 @@
 
       const events = [];
 
-      rows.forEach((row, i) => {
+      rows.forEach((row) => {
         const c = row.c || [];
         const getValue = (idx) => (idx !== -1 && c[idx] && c[idx].v !== null) ? String(c[idx].v).trim() : '';
 
@@ -123,14 +123,14 @@
         const time = getValue(timeIdx !== -1 ? timeIdx : 2) || 'ALL DAY';
         const link = getValue(linkIdx !== -1 ? linkIdx : 3) || '#';
 
-        // Unique deterministic ID based on event name and link
+        // Generate deterministic unique ID using Name + Link
         const id = 'sheet_' + btoa(unescape(encodeURIComponent(name + link))).replace(/=/g, '').slice(-20);
 
         events.push({
           id: id,
           name: name,
           start_date: date,
-          location: time, // Reusing location column for formatted time
+          location: time,
           website: link
         });
       });
@@ -145,8 +145,10 @@
       try {
         const events = await fetchGoogleSheetData(url);
 
-        // Fetch existing record statuses to avoid overwriting "applied" or "not_relevant"
-        const { data: existing } = await db.from('events').select('id, status');
+        // Fetch existing record statuses to preserve 'applied' or 'not_relevant' flags
+        const { data: existing, error: fetchErr } = await db.from('events').select('id, status');
+        if (fetchErr) throw fetchErr;
+
         const existingStatusMap = new Map((existing || []).map(x => [x.id, x.status]));
 
         const recordsToSave = events.map(e => ({
@@ -158,13 +160,13 @@
           status: existingStatusMap.get(e.id) || 'active'
         }));
 
-        const { error } = await db.from('events').upsert(recordsToSave, { onConflict: 'id' });
-        if (error) throw error;
+        const { error: upsertErr } = await db.from('events').upsert(recordsToSave, { onConflict: 'id' });
+        if (upsertErr) throw upsertErr;
 
         showStatus(`Synced ${events.length} events from Google Sheet successfully!`, "success");
         await loadData();
       } catch (err) {
-        showStatus("Google Sheet Error: " + err.message, "error");
+        handleError(err, "Google Sheet Sync Error: ");
       }
     }
 
@@ -174,9 +176,10 @@
 
       try {
         const events = await fetchGoogleSheetData(url);
-        const { data: existing } = await db.from('events').select('id');
-        const existingIds = new Set((existing || []).map(x => x.id));
+        const { data: existing, error: fetchErr } = await db.from('events').select('id');
+        if (fetchErr) throw fetchErr;
 
+        const existingIds = new Set((existing || []).map(x => x.id));
         const newBody = document.getElementById('new-table');
         newBody.innerHTML = '';
         let newCount = 0;
@@ -202,10 +205,10 @@
         if (newCount > 0) {
           showStatus(`Found ${newCount} new events! Review them in the top section.`, "success");
         } else {
-          showStatus("No new events found. Your database is up to date with the Google Sheet!", "success");
+          showStatus("No new events found. Database is up to date!", "success");
         }
       } catch (err) {
-        showStatus("Check Error: " + err.message, "error");
+        handleError(err, "Check Error: ");
       }
     }
 
@@ -246,7 +249,7 @@
           }
         });
       } catch (err) {
-        showStatus("Database Error: " + err.message, "error");
+        handleError(err, "Database Error: ");
       }
     }
 
@@ -259,6 +262,14 @@
       await db.from('events').upsert({ id, name, start_date, location: time, website, status }, { onConflict: 'id' });
       await loadData();
       document.getElementById('new-table').innerHTML = '';
+    }
+
+    function handleError(err, prefix = '') {
+      if (err.message && (err.message.includes('Failed to fetch') || err.name === 'TypeError')) {
+        showStatus("Cannot reach Supabase! Ensure your project is active and 'events' table exists.", "error");
+      } else {
+        showStatus(prefix + err.message, "error");
+      }
     }
 
     loadData();

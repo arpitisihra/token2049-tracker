@@ -20,7 +20,7 @@
     .status-success { background: #dcfce7; color: #15803d; display: block !important; }
     h2 { margin-top: 30px; font-size: 18px; color: #1e293b; }
     table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 14px; word-break: break-word; }
     th { background: #f1f5f9; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
     .btn-action { padding: 6px 12px; font-size: 12px; margin-right: 5px; border-radius: 4px; border: none; cursor: pointer; color: white; font-weight: 600; }
     .btn-applied { background: #16a34a; }
@@ -117,7 +117,7 @@
       };
     }
 
-    // Helper: Formats cell content & handles raw Date(...) strings
+    // Formats raw cell objects & Google Date(...) syntax
     function formatCell(cObj) {
       if (!cObj) return '';
       let formatted = cObj.f ? String(cObj.f).trim() : '';
@@ -148,30 +148,41 @@
       return val;
     }
 
-    // Helper: Smart URL extraction to prevent relative domain redirects
-    function extractCellUrl(cObj) {
-      if (!cObj) return '#';
-      let raw = String(cObj.v || '').trim();
-      let formatted = String(cObj.f || '').trim();
+    // Ensures URLs have a valid http/https protocol
+    function normalizeUrl(url) {
+      if (!url || url === '#' || url === '-') return '';
+      let clean = String(url).trim();
+      if (!clean) return '';
 
-      // Check if raw value or formatted value contains a web address
-      let candidate = [raw, formatted].find(v => 
-        v.startsWith('http://') || 
-        v.startsWith('https://') || 
-        v.includes('lu.ma') || 
-        v.includes('t.me') || 
-        v.includes('miragather.com') ||
-        (v.includes('.') && !v.includes(' ') && v.length > 4)
-      );
+      if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+        if (clean.includes('.') || clean.includes('/')) {
+          clean = 'https://' + clean;
+        } else {
+          return '';
+        }
+      }
+      return clean;
+    }
 
-      if (!candidate) return '#';
-
-      // Prepend https:// if protocol is missing
-      if (!candidate.startsWith('http://') && !candidate.startsWith('https://')) {
-        candidate = 'https://' + candidate;
+    // Extract URL from a row, searching across all cells if primary link cell is missing a URL
+    function extractRowLink(rowCells, primaryLinkIdx) {
+      // 1. Try primary link index first
+      if (primaryLinkIdx !== -1 && rowCells[primaryLinkIdx]) {
+        let val = formatCell(rowCells[primaryLinkIdx]);
+        let url = normalizeUrl(val);
+        if (url) return url;
       }
 
-      return candidate;
+      // 2. Fallback: Search all cells in row for a URL string pattern
+      for (let cell of rowCells) {
+        let val = formatCell(cell);
+        if (val.includes('lu.ma') || val.includes('t.me') || val.includes('http') || val.includes('www.') || val.includes('.com') || val.includes('.io') || val.includes('.xyz')) {
+          let url = normalizeUrl(val);
+          if (url) return url;
+        }
+      }
+
+      return '';
     }
 
     function parseTimes(rawStart, rawEnd) {
@@ -207,7 +218,7 @@
 
       const raw2D = rows.map(r => r.c || []);
 
-      // Find header row index if available
+      // Find header row
       let headerRowIndex = -1;
       for (let r = 0; r < Math.min(3, raw2D.length); r++) {
         const rowStr = raw2D[r].map(c => formatCell(c)).join(' ').toLowerCase();
@@ -222,7 +233,7 @@
       if (headerRowIndex !== -1) {
         const headers = raw2D[headerRowIndex].map(c => formatCell(c).toLowerCase().trim());
         headers.forEach((h, i) => {
-          if (h.includes('link') || h.includes('url') || h.includes('website')) linkIdx = i;
+          if (h.includes('link') || h.includes('url') || h.includes('website') || h.includes('luma') || h.includes('rsvp')) linkIdx = i;
           else if (h.includes('start') && h.includes('time')) startIdx = i;
           else if ((h.includes('end') || h.includes('finish')) && h.includes('time')) endIdx = i;
           else if (h.includes('date') && !h.includes('end')) dateIdx = i;
@@ -230,51 +241,9 @@
         });
       }
 
-      // Value inspection fallback
       const dataRows = raw2D.filter((_, idx) => idx !== headerRowIndex && _.some(cell => formatCell(cell).length > 0));
 
-      if (dataRows.length > 0) {
-        const sampleRow = dataRows[0];
-
-        if (linkIdx === -1) {
-          linkIdx = sampleRow.findIndex(c => {
-            const url = extractCellUrl(c);
-            return url !== '#';
-          });
-        }
-
-        if (dateIdx === -1) {
-          dateIdx = sampleRow.findIndex((c, i) => {
-            const val = formatCell(c);
-            return i !== linkIdx && (val.includes('202') || val.match(/Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Mon|Tue|Wed|Thu|Fri|Sat|Sun/i));
-          });
-        }
-
-        if (startIdx === -1) {
-          startIdx = sampleRow.findIndex((c, i) => {
-            const val = formatCell(c);
-            return i !== linkIdx && i !== dateIdx && (val.match(/\d{1,2}:\d{2}/) || val.toLowerCase().includes('am') || val.toLowerCase().includes('pm'));
-          });
-        }
-
-        if (endIdx === -1 && startIdx !== -1) {
-          endIdx = sampleRow.findIndex((c, i) => {
-            const val = formatCell(c);
-            return i !== linkIdx && i !== dateIdx && i !== startIdx && (val.match(/\d{1,2}:\d{2}/) || val.toLowerCase().includes('am') || val.toLowerCase().includes('pm'));
-          });
-        }
-
-        if (nameIdx === -1) {
-          nameIdx = sampleRow.findIndex((c, i) => {
-            const val = formatCell(c);
-            if (i === linkIdx || i === dateIdx || i === startIdx || i === endIdx) return false;
-            if (val.length > 15 && !val.includes(' ') && val.match(/^[a-f0-9]+$/i)) return false; 
-            return val.length > 0;
-          });
-        }
-      }
-
-      // Fallback defaults
+      // Positional fallbacks if headers missed
       if (dateIdx === -1) dateIdx = 1;
       if (startIdx === -1) startIdx = 2;
       if (endIdx === -1) endIdx = 3;
@@ -291,7 +260,7 @@
         const date = formatCell(row[dateIdx]) || 'TBD';
         const rawStart = formatCell(row[startIdx]);
         const rawEnd = formatCell(row[endIdx]);
-        const link = extractCellUrl(row[linkIdx]);
+        const link = extractRowLink(row, linkIdx);
 
         const { startTime, endTime } = parseTimes(rawStart, rawEnd);
         const id = 'sheet_' + btoa(unescape(encodeURIComponent(name + link))).replace(/=/g, '').slice(-20);
@@ -370,7 +339,7 @@
               <td><strong>${escapeHtml(cleanTimeString(startTime) || 'ALL DAY')}</strong></td>
               <td>${escapeHtml(cleanTimeString(endTime) || '-')}</td>
               <td><span class="badge-new">NEW</span> <strong>${escapeHtml(e.name)}</strong></td>
-              <td>${renderLinkAnchor(e.website)}</td>
+              <td>${renderLinkColumn(e.website)}</td>
               <td>
                 <button class="btn-action btn-add" onclick="saveAndSet('${e.id}', 'active')">Add to Original</button>
                 <button class="btn-action btn-applied" onclick="saveAndSet('${e.id}', 'applied')">Applied</button>
@@ -417,7 +386,7 @@
                 <td><strong>${escapeHtml(startDisplay)}</strong></td>
                 <td>${escapeHtml(endDisplay)}</td>
                 <td><strong>${escapeHtml(e.name)}</strong></td>
-                <td>${renderLinkAnchor(e.website)}</td>
+                <td>${renderLinkColumn(e.website)}</td>
                 <td>
                   <button class="btn-action btn-applied" onclick="setStatus('${e.id}', 'applied')">Applied</button>
                   <button class="btn-action btn-irrelevant" onclick="setStatus('${e.id}', 'not_relevant')">Not Relevant</button>
@@ -431,7 +400,7 @@
                 <td>${escapeHtml(startDisplay)}</td>
                 <td>${escapeHtml(endDisplay)}</td>
                 <td>${escapeHtml(e.name)}</td>
-                <td>${renderLinkAnchor(e.website)}</td>
+                <td>${renderLinkColumn(e.website)}</td>
                 <td><span class="badge-status ${badgeClass}">${e.status.replace('_', ' ')}</span></td>
               </tr>`;
           }
@@ -441,11 +410,19 @@
       }
     }
 
-    function renderLinkAnchor(url) {
-      if (!url || url === '#' || url.toLowerCase() === 'link') {
-        return `<span style="color: #94a3b8;">No Link</span>`;
+    // Renders the link clearly in the table
+    function renderLinkColumn(url) {
+      if (!url || url === '#' || url === '-') {
+        return `<span style="color: #94a3b8;">-</span>`;
       }
-      return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Link ↗</a>`;
+      
+      // Clean up protocol prefix for compact display
+      let display = url.replace(/^https?:\/\//, '');
+      if (display.length > 35) {
+        display = display.substring(0, 32) + '...';
+      }
+
+      return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(display)} ↗</a>`;
     }
 
     async function setStatus(id, status) {
